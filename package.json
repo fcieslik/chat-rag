@@ -1,0 +1,11 @@
+{
+  "name": "chat-rag",
+  "private": true,
+  "packageManager": "pnpm@11.25.0",
+  "scripts": {
+    "dev:api": "pnpm --filter @chat-rag/api dev",
+    "build:api": "pnpm --filter @chat-rag/api build",
+    "start:api": "pnpm --filter @chat-rag/api start",
+    "typecheck:api": "pnpm --filter @chat-rag/api typecheck"
+  }
+}
