@@ -1,4 +1,5 @@
 node_modules/
+.pnpm-store/
 dist/
 
 # Local environment files in any workspace package.

@@ -1,6 +1,6 @@
 # Chat RAG
 
-Anonymous AI chat with a React/Vite frontend and an Express streaming API.
+AI chat with a React/Vite frontend authenticated by Cognito and an Express streaming API.
 
 ## Local development
 
@@ -18,10 +18,10 @@ Then start the complete local stack:
 pnpm compose:local:up
 ```
 
-Open the frontend at [http://localhost:8080](http://localhost:8080). The services are:
+Open the frontend at [http://localhost:5173](http://localhost:5173) and sign in with a user from the configured Cognito User Pool. The services are:
 
 ```text
-Frontend: http://localhost:8080
+Frontend: http://localhost:5173
 API:      http://localhost:8000
 Chat:     POST http://localhost:8000/v1/chat
 Health:   GET  http://localhost:8000/health
@@ -42,7 +42,9 @@ pnpm dev:api
 VITE_CHAT_API_URL= VITE_API_URL= pnpm dev:web
 ```
 
-Open [http://localhost:5173](http://localhost:5173). The empty environment variables override the AWS value from `apps/web/.env.local`, so Vite proxies `/v1/chat` to the local API on port `8000`.
+Open [http://localhost:5173](http://localhost:5173), sign in, and use the chat. The empty environment variables override the AWS value from `apps/web/.env.local`, so Vite proxies `/v1/chat` to the local API on port `8000`.
+
+The frontend Cognito defaults match the current User Pool. For another environment, copy `apps/web/.env.example` to `apps/web/.env.local` and set the `VITE_COGNITO_*` values. The Cognito app client must be a public client using Authorization Code Grant with PKCE, and must allow `http://localhost:5173` as callback and sign-out URLs.
 
 ## Testing the AWS API from the frontend
 
@@ -70,7 +72,7 @@ Configure the API Gateway route `/chat` to support `OPTIONS` and allow:
 
 ```text
 Methods: POST, OPTIONS
-Headers: Content-Type
+Headers: Content-Type, Authorization
 Origin:  http://localhost:5173
 ```
 
@@ -81,6 +83,7 @@ Example direct request:
 ```bash
 curl -N https://2780017ujg.execute-api.eu-central-1.amazonaws.com/prod/chat \
   -H "Content-Type: application/json" \
+  -H "Authorization: Bearer <cognito-access-token>" \
   -d '{"message":"Reply with one short sentence."}'
 ```
 
@@ -93,13 +96,19 @@ data: [DONE]
 
 ## Production build
 
-For a different API endpoint, provide the full chat URL during the build:
+For a different API endpoint or Cognito environment, provide the values during the build:
 
 ```bash
-VITE_CHAT_API_URL=https://api.example.com/prod/chat pnpm build:web
+VITE_CHAT_API_URL=https://api.example.com/prod/chat \
+VITE_COGNITO_AUTHORITY=https://cognito-idp.eu-central-1.amazonaws.com/eu-central-1_example \
+VITE_COGNITO_CLIENT_ID=example-client-id \
+VITE_COGNITO_DOMAIN=https://example.auth.eu-central-1.amazoncognito.com \
+pnpm build:web
 ```
 
 The generated static files are in `apps/web/dist/` and can be uploaded to S3.
+
+The production CloudFront/custom-domain origin must be registered in Cognito as both an allowed callback URL and an allowed sign-out URL. The API/ECS environment must include `COGNITO_ISSUER`, `COGNITO_CLIENT_ID`, and the frontend origins in `FRONTEND_ORIGINS`.
 
 ## co zrobic po nowym obrazie
 

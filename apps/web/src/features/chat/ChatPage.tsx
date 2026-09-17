@@ -9,7 +9,13 @@ interface ChatMessage {
   content: string;
 }
 
-export function ChatPage() {
+interface ChatPageProps {
+  accessToken: string;
+  onAuthenticationFailure: () => void;
+  onSignOut: () => void;
+}
+
+export function ChatPage({ accessToken, onAuthenticationFailure, onSignOut }: ChatPageProps) {
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [input, setInput] = useState("");
   const [isStreaming, setIsStreaming] = useState(false);
@@ -47,6 +53,7 @@ export function ChatPage() {
     try {
       await streamChatResponse(
         message,
+        accessToken,
         (delta) => {
           setMessages((currentMessages) =>
             currentMessages.map((currentMessage) =>
@@ -60,6 +67,9 @@ export function ChatPage() {
       );
     } catch (requestError) {
       if (!controller.signal.aborted) {
+        if (requestError instanceof Error && requestError.name === "AuthenticationError") {
+          onAuthenticationFailure();
+        }
         setError(requestError instanceof Error ? requestError.message : "The chat request failed.");
         setMessages((currentMessages) =>
           currentMessages.filter((currentMessage) => currentMessage.id !== assistantMessageId),
@@ -89,6 +99,7 @@ export function ChatPage() {
           <span className={isStreaming ? "status status-streaming" : "status"}>
             {isStreaming ? "Streaming" : "Ready"}
           </span>
+          <button type="button" onClick={onSignOut}>Sign out</button>
         </header>
 
         <div className="messages" aria-live="polite">

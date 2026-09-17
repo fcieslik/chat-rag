@@ -7,7 +7,7 @@ RUN corepack enable
 COPY package.json pnpm-lock.yaml pnpm-workspace.yaml ./
 COPY apps/api/package.json apps/api/package.json
 
-RUN pnpm install --filter @chat-rag/api... --frozen-lockfile
+RUN pnpm install --filter @chat-rag/api... --prod=false --frozen-lockfile
 
 COPY apps/api/tsconfig.json apps/api/tsconfig.json
 COPY apps/api/src apps/api/src

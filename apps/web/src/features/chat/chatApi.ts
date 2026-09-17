@@ -6,6 +6,13 @@ interface ChatStreamEvent {
   delta?: unknown;
 }
 
+export class AuthenticationError extends Error {
+  constructor() {
+    super("Your session is no longer valid. Please sign in again.");
+    this.name = "AuthenticationError";
+  }
+}
+
 function getErrorMessage(error: unknown): string {
   if (error instanceof Error) {
     return error.message;
@@ -16,17 +23,29 @@ function getErrorMessage(error: unknown): string {
 
 export async function streamChatResponse(
   message: string,
+  accessToken: string,
   onDelta: (delta: string) => void,
   signal: AbortSignal,
 ): Promise<void> {
+  if (!accessToken) {
+    throw new Error("Authentication is required.");
+  }
+
   const response = await fetch(chatEndpoint, {
     method: "POST",
-    headers: { "Content-Type": "application/json" },
+    headers: {
+      Authorization: `Bearer ${accessToken}`,
+      "Content-Type": "application/json",
+    },
     body: JSON.stringify({ message }),
     signal,
   });
 
   if (!response.ok) {
+    if (response.status === 401) {
+      throw new AuthenticationError();
+    }
+
     let details = "The chat request failed.";
 
     try {

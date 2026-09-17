@@ -1,7 +1,11 @@
 import express from "express";
 import cors from "cors";
+import {
+  createCognitoAccessTokenVerifier,
+  type AccessTokenVerifier,
+} from "./auth/cognito.js";
+import { requireAccessToken } from "./auth/requireAccessToken.js";
 
-const app = express();
 const openAiChatCompletionsUrl = "https://api.openai.com/v1/chat/completions";
 const openAiModel = "gpt-5.6-luna";
 
@@ -17,31 +21,38 @@ interface ChatCompletionChunk {
   }>;
 }
 
-const allowedOrigins = (
-  process.env.FRONTEND_ORIGINS ??
-  process.env.FRONTEND_ORIGIN ??
-  "http://localhost:5173,http://localhost:8080"
-)
-  .split(",")
-  .map((origin) => origin.trim())
-  .filter(Boolean);
+interface AppOptions {
+  verifyAccessToken?: AccessTokenVerifier;
+}
 
-app.use(
-  cors({
-    origin: allowedOrigins,
-    methods: ["POST", "OPTIONS"],
-    allowedHeaders: ["Content-Type", "Authorization"],
-    optionsSuccessStatus: 204,
-  }),
-);
+export function createApp(options: AppOptions = {}) {
+  const app = express();
+  const allowedOrigins = (
+    process.env.FRONTEND_ORIGINS ??
+    process.env.FRONTEND_ORIGIN ??
+    "http://localhost:5173,http://localhost:8080"
+  )
+    .split(",")
+    .map((origin) => origin.trim())
+    .filter(Boolean);
+  const verifyAccessToken = options.verifyAccessToken ?? createCognitoAccessTokenVerifier();
 
-app.use(express.json());
+  app.use(
+    cors({
+      origin: allowedOrigins,
+      methods: ["POST", "OPTIONS"],
+      allowedHeaders: ["Content-Type", "Authorization"],
+      optionsSuccessStatus: 204,
+    }),
+  );
 
-app.get("/health", (_request, response) => {
-  response.json({ status: "ok" });
-});
+  app.use(express.json());
 
-app.post("/v1/chat", async (request, response) => {
+  app.get("/health", (_request, response) => {
+    response.json({ status: "ok" });
+  });
+
+  app.post("/v1/chat", requireAccessToken(verifyAccessToken), async (request, response) => {
   const { message } = request.body as ChatRequestBody;
 
   if (typeof message !== "string" || message.trim().length === 0) {
@@ -156,6 +167,11 @@ app.post("/v1/chat", async (request, response) => {
     request.off("aborted", abortIfClientDisconnects);
     response.off("close", abortIfClientDisconnects);
   }
-});
+  });
+
+  return app;
+}
+
+const app = createApp();
 
 export { app };
