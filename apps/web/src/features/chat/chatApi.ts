@@ -1,5 +1,6 @@
 const apiUrl = (import.meta.env.VITE_API_URL ?? "").replace(/\/$/, "");
-const chatEndpoint = `${apiUrl}/v1/chat`;
+const chatEndpoint =
+  import.meta.env.VITE_CHAT_API_URL?.trim() || `${apiUrl}/v1/chat`;
 
 interface ChatStreamEvent {
   delta?: unknown;

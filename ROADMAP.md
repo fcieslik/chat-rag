@@ -1068,3 +1068,121 @@ What problem does it solve?
 What breaks or changes if we remove it?
 
 This keeps the project focused on **understanding architecture**, rather than simply following a deployment tutorial.
+
+## CORS — obecna konfiguracja i późniejsza zmiana
+
+### Obecnie — development
+
+Frontend działa lokalnie:
+
+`http://localhost:5173`
+
+API jest już uruchomione w AWS:
+
+```text
+localhost:5173
+      ↓
+API Gateway /prod/chat
+      ↓
+ALB
+      ↓
+ECS Fargate
+```
+
+CORS musi pozwalać na origin:
+
+```text
+http://localhost:5173
+```
+
+### API Gateway
+
+Dla `/chat` utworzono:
+
+```text
+OPTIONS /chat
+```
+
+Integration:
+
+```text
+Mock
+```
+
+Response `200` zawiera:
+
+```text
+Access-Control-Allow-Origin: 'http://localhost:5173'
+Access-Control-Allow-Methods: 'POST,OPTIONS'
+Access-Control-Allow-Headers: 'content-type,authorization'
+```
+
+### Backend — Express
+
+Ponieważ `/chat` używa **HTTP Proxy integration**, API Gateway nie może modyfikować właściwej odpowiedzi `POST`.
+
+Dlatego CORS dla właściwego requestu jest obsługiwany w Express:
+
+```text
+POST /chat
+    ↓
+API Gateway (HTTP Proxy)
+    ↓
+ALB
+    ↓
+ECS / Express
+    ↓
+CORS headers
+```
+
+Obecnie Express powinien dopuszczać:
+
+```text
+http://localhost:5173
+```
+
+### TODO — po uruchomieniu frontendu na AWS
+
+Gdy frontend zostanie przeniesiony z localhost na S3 / CloudFront / własną domenę:
+
+1. Ustalić finalny production origin, np.:
+
+```text
+https://app.example.com
+```
+
+2. Dodać production origin do konfiguracji CORS w Express.
+
+3. Zaktualizować `OPTIONS /chat` w API Gateway, aby preflight również dopuszczał production origin.
+
+4. Nie używać bez potrzeby:
+
+```text
+Access-Control-Allow-Origin: *
+```
+
+szczególnie gdy API będzie używało autoryzacji / credentials.
+
+### Docelowo
+
+CORS powinien być konfigurowany per environment, a nie hardkodowany w kodzie:
+
+```text
+DEV:
+http://localhost:5173
+
+PROD:
+https://app.example.com
+```
+
+Najlepiej przekazywać originy jako konfigurację środowiskową ECS, np.:
+
+```text
+CORS_ALLOWED_ORIGINS
+```
+
+### Ważne rozróżnienie
+
+CORS **nie zabezpiecza API przed bezpośrednim dostępem**. Kontroluje, które originy przeglądarkowe mogą odczytywać odpowiedzi.
+
+Autoryzacja API, zabezpieczenie ALB, Cognito/JWT itd. są osobnymi elementami security.

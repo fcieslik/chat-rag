@@ -1,4 +1,5 @@
 import express from "express";
+import cors from "cors";
 
 const app = express();
 const openAiChatCompletionsUrl = "https://api.openai.com/v1/chat/completions";
@@ -16,24 +17,25 @@ interface ChatCompletionChunk {
   }>;
 }
 
+const allowedOrigins = (
+  process.env.FRONTEND_ORIGINS ??
+  process.env.FRONTEND_ORIGIN ??
+  "http://localhost:5173,http://localhost:8080"
+)
+  .split(",")
+  .map((origin) => origin.trim())
+  .filter(Boolean);
+
+app.use(
+  cors({
+    origin: allowedOrigins,
+    methods: ["POST", "OPTIONS"],
+    allowedHeaders: ["Content-Type", "Authorization"],
+    optionsSuccessStatus: 204,
+  }),
+);
+
 app.use(express.json());
-
-const frontendOrigin = process.env.FRONTEND_ORIGIN;
-
-if (frontendOrigin) {
-  app.use((request, response, next) => {
-    response.setHeader("Access-Control-Allow-Origin", frontendOrigin);
-    response.setHeader("Access-Control-Allow-Methods", "GET,POST,OPTIONS");
-    response.setHeader("Access-Control-Allow-Headers", "Content-Type");
-
-    if (request.method === "OPTIONS") {
-      response.sendStatus(204);
-      return;
-    }
-
-    next();
-  });
-}
 
 app.get("/health", (_request, response) => {
   response.json({ status: "ok" });
