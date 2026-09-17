@@ -30,6 +30,6 @@ COPY --from=build /app/apps/api/dist apps/api/dist
 
 USER node
 
-EXPOSE 3000
+EXPOSE 8000
 
 CMD ["node", "apps/api/dist/server.js"]
