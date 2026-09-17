@@ -6,6 +6,11 @@
     "dev:api": "pnpm --filter @chat-rag/api dev",
     "build:api": "pnpm --filter @chat-rag/api build",
     "start:api": "pnpm --filter @chat-rag/api start",
-    "typecheck:api": "pnpm --filter @chat-rag/api typecheck"
+    "typecheck:api": "pnpm --filter @chat-rag/api typecheck",
+    "dev:web": "pnpm --filter @chat-rag/web dev",
+    "build:web": "pnpm --filter @chat-rag/web build",
+    "typecheck:web": "pnpm --filter @chat-rag/web typecheck",
+    "compose:local:up": "docker compose --env-file .env.local -f docker-compose.local.yml up --build",
+    "compose:local:down": "docker compose --env-file .env.local -f docker-compose.local.yml down"
   }
 }
