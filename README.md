@@ -183,12 +183,14 @@ Po zakończeniu kroku `Deploy to Amazon ECS` workflow ma potwierdzoną stabilno�
 
 ### Weryfikacja wdrożenia i rollbacku
 
+Granica automatyzacji jest celowa: GitHub Actions automatycznie sprawdza stabilność ECS, nową revision oraz publiczny smoke test API Gateway. Rola `chat-rag-github-actions` nie ma uprawnień odczytu ELBv2 ani CloudWatch Logs, dlatego sprawdzenie targetu ALB i logów CloudWatch pozostaje ręcznym potwierdzeniem operatora w AWS Console lub CLI i nie jest dodatkowym krokiem workflow.
+
 Udane wdrożenie powinno pozostawić następujące ślady:
 
 1. GitHub Actions: krok ECS kończy się po `wait-for-service-stability: true`, jawna kontrola `DescribeServices` potwierdza nową revision i zgodną liczbę działających task, a podsumowanie zawiera ARN Task Definition i obraz oznaczony `${GITHUB_SHA}`.
 2. ECS: `chat-rag-api-service` ma jedną działającą taskę na nowej revision, a deployment ma stan `COMPLETED`.
-3. ALB: target kontenera `chat-rag-api` w `chat-rag-internal-tg` jest `healthy` dla `GET /health`.
-4. CloudWatch: grupa `/ecs/chat-rag-api` zawiera log startu nowej taski i nie pokazuje pętli restartów ani błędów uruchomienia.
+3. ALB (ręcznie): target kontenera `chat-rag-api` w `chat-rag-internal-tg` jest `healthy` dla `GET /health`.
+4. CloudWatch (ręcznie): grupa `/ecs/chat-rag-api` zawiera log startu nowej taski i nie pokazuje pętli restartów ani błędów uruchomienia.
 5. API Gateway: publiczny endpoint `GET /prod/health` zwraca HTTP 2xx oraz `{"status":"ok"}`.
 
 Kontrolowany test circuit breakera wykonuj osobno, w uzgodnionym oknie utrzymaniowym, nigdy jako część zwykłego workflow. Zarejestruj tymczasową revision z tym samym plikiem Task Definition i jedyną zmianą w `containerDefinitions[].image`: użyj unikalnego, celowo nieistniejącego tagu zawierającego SHA testowego commita, np. `rollback-drill-${GITHUB_SHA}`. Następnie skieruj `chat-rag-api-service` na tę revision i obserwuj ECS. Próba uruchomienia taski zakończy się błędem pobrania obrazu, więc deployment powinien zostać oznaczony jako `FAILED` przez circuit breaker i automatycznie wycofany do ostatniej ukończonej revision. W ECS potwierdź komunikat o zadziałaniu deployment circuit breakera, poprzednią revision jako aktywną oraz zdrowy target ALB. Zachowaj tag obrazu i ARN/revision testowej Task Definition do czasu zakończenia diagnozy i nie usuwaj ich w ramach testu.
