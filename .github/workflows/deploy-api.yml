@@ -130,6 +130,7 @@ jobs:
           image: ${{ env.ECR_REGISTRY }}/${{ env.ECR_REPOSITORY }}:${{ github.sha }}
 
       - name: Deploy to Amazon ECS
+        id: deploy
         uses: aws-actions/amazon-ecs-deploy-task-definition@v2
         with:
           task-definition: ${{ steps.render-task-definition.outputs.task-definition }}
@@ -137,9 +138,48 @@ jobs:
           service: chat-rag-api-service
           wait-for-service-stability: true
 
+      - name: Record production deployment identity
+        if: always()
+        env:
+          IMAGE_URI: ${{ env.ECR_REGISTRY }}/${{ env.ECR_REPOSITORY }}:${{ github.sha }}
+          TASK_DEFINITION_ARN: ${{ steps.deploy.outputs.task-definition-arn }}
+          DEPLOY_RESULT: ${{ steps.deploy.outcome }}
+        run: |
+          {
+            echo '### Production deployment'
+            echo "- Commit: \`$GITHUB_SHA\`"
+            echo "- Image: \`$IMAGE_URI\`"
+            echo "- ECS deployment action: \`$DEPLOY_RESULT\`"
+            if [[ -n "$TASK_DEFINITION_ARN" ]]; then
+              echo "- Task Definition: \`$TASK_DEFINITION_ARN\`"
+            else
+              echo '- Task Definition: see the ECS action log if registration failed before an ARN was returned'
+            fi
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Verify ECS service deployment
+        env:
+          TASK_DEFINITION_ARN: ${{ steps.deploy.outputs.task-definition-arn }}
+        run: |
+          set -euo pipefail
+          service="$(aws ecs describe-services \
+            --cluster chat-rag-cluster \
+            --services chat-rag-api-service \
+            --output json)"
+          printf '%s' "$service" | jq --exit-status --arg task_definition "$TASK_DEFINITION_ARN" '
+            (.services | length == 1) and
+            (.services[0].runningCount == .services[0].desiredCount) and
+            any(.services[0].deployments[];
+              .status == "PRIMARY" and
+              .rolloutState == "COMPLETED" and
+              .taskDefinition == $task_definition
+            )
+          '
+
       - name: Verify production health
         env:
           HEALTH_URL: https://2780017ujg.execute-api.eu-central-1.amazonaws.com/prod/health
         run: |
+          set -euo pipefail
           response="$(curl --fail --silent --show-error --location --retry 5 --retry-delay 10 "$HEALTH_URL")"
           printf '%s' "$response" | jq --exit-status 'type == "object" and .status == "ok"'

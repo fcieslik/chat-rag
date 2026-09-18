@@ -179,4 +179,18 @@ GET https://2780017ujg.execute-api.eu-central-1.amazonaws.com/prod/health
 → {"status":"ok"}
 ```
 
-ECS używa istniejącego deployment circuit breaker z rollbackiem. Jeżeli nowe taski nie przejdą health checków ECS/ALB, deployment powinien zostać oznaczony jako nieudany i wycofany do ostatniej udanej revision. Błąd smoke testu po uzyskaniu stabilności ECS oznacza nieudany workflow, ale sam nie uruchamia circuit breakera.
+Po zakończeniu kroku `Deploy to Amazon ECS` workflow ma potwierdzoną stabilność service. W podsumowaniu joba zapisuje commit SHA, pełny tag obrazu oraz ARN zarejestrowanej revision Task Definition, aby nie utracić identyfikatorów potrzebnych do diagnozy.
+
+### Weryfikacja wdrożenia i rollbacku
+
+Udane wdrożenie powinno pozostawić następujące ślady:
+
+1. GitHub Actions: krok ECS kończy się po `wait-for-service-stability: true`, jawna kontrola `DescribeServices` potwierdza nową revision i zgodną liczbę działających task, a podsumowanie zawiera ARN Task Definition i obraz oznaczony `${GITHUB_SHA}`.
+2. ECS: `chat-rag-api-service` ma jedną działającą taskę na nowej revision, a deployment ma stan `COMPLETED`.
+3. ALB: target kontenera `chat-rag-api` w `chat-rag-internal-tg` jest `healthy` dla `GET /health`.
+4. CloudWatch: grupa `/ecs/chat-rag-api` zawiera log startu nowej taski i nie pokazuje pętli restartów ani błędów uruchomienia.
+5. API Gateway: publiczny endpoint `GET /prod/health` zwraca HTTP 2xx oraz `{"status":"ok"}`.
+
+Kontrolowany test circuit breakera wykonuj osobno, w uzgodnionym oknie utrzymaniowym, nigdy jako część zwykłego workflow. Zarejestruj tymczasową revision z tym samym plikiem Task Definition i jedyną zmianą w `containerDefinitions[].image`: użyj unikalnego, celowo nieistniejącego tagu zawierającego SHA testowego commita, np. `rollback-drill-${GITHUB_SHA}`. Następnie skieruj `chat-rag-api-service` na tę revision i obserwuj ECS. Próba uruchomienia taski zakończy się błędem pobrania obrazu, więc deployment powinien zostać oznaczony jako `FAILED` przez circuit breaker i automatycznie wycofany do ostatniej ukończonej revision. W ECS potwierdź komunikat o zadziałaniu deployment circuit breakera, poprzednią revision jako aktywną oraz zdrowy target ALB. Zachowaj tag obrazu i ARN/revision testowej Task Definition do czasu zakończenia diagnozy i nie usuwaj ich w ramach testu.
+
+Ten test jest niezależny od smoke testu. Jeżeli ECS osiągnie stabilność, a późniejszy request do API Gateway zakończy się błędem HTTP albo odpowiedzią inną niż `{"status":"ok"}`, krok `Verify production health` kończy job GitHub Actions jako nieudany i deployment jest widoczny jako failed production deployment. Taki błąd po stabilizacji ECS nie uruchamia samodzielnie deployment circuit breakera ani nie wykonuje rollbacku ECS.
