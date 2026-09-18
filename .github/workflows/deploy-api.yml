@@ -4,6 +4,7 @@ on:
   push:
     branches:
       - main
+      - 'feature/**'
     paths-ignore:
       - docs/agents/**
       - .scratch/**
@@ -16,7 +17,77 @@ env:
   ECR_REPOSITORY: chat-rag-api
 
 jobs:
-  build-and-push:
+  validate:
+    runs-on: ubuntu-latest
+
+    outputs:
+      productionChanges: ${{ steps.production-changes.outputs.deploy }}
+
+    permissions:
+      contents: read
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Set up pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 11.25.0
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Run tests
+        run: pnpm test
+
+      - name: Typecheck API
+        run: pnpm typecheck:api
+
+      - name: Typecheck web
+        run: pnpm typecheck:web
+
+      - name: Build API
+        run: pnpm build:api
+
+      - name: Build web
+        run: pnpm build:web
+
+      - name: Detect production changes
+        id: production-changes
+        env:
+          BEFORE_SHA: ${{ github.event.before }}
+          CURRENT_SHA: ${{ github.sha }}
+        run: |
+          if [[ "$BEFORE_SHA" == "0000000000000000000000000000000000000000" ]]; then
+            changed_files="$(git ls-files)"
+          else
+            changed_files="$(git diff --name-only "$BEFORE_SHA" "$CURRENT_SHA")"
+          fi
+
+          deploy=false
+          while IFS= read -r path; do
+            case "$path" in
+              apps/api/*|infra/*|.github/workflows/deploy-api.yml|package.json|pnpm-lock.yaml|pnpm-workspace.yaml)
+                deploy=true
+                break
+                ;;
+            esac
+          done <<< "$changed_files"
+
+          echo "deploy=$deploy" >> "$GITHUB_OUTPUT"
+
+  deploy:
+    needs: validate
+    if: github.ref == 'refs/heads/main' && needs.validate.outputs.productionChanges == 'true'
     runs-on: ubuntu-latest
 
     permissions:
@@ -48,3 +119,26 @@ jobs:
           tags: ${{ env.ECR_REGISTRY }}/${{ env.ECR_REPOSITORY }}:${{ github.sha }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
+
+      - name: Render ECS task definition
+        id: render-task-definition
+        uses: aws-actions/amazon-ecs-render-task-definition@v1
+        with:
+          task-definition: infra/ecs/task-definition.json
+          container-name: chat-rag-api
+          image: ${{ env.ECR_REGISTRY }}/${{ env.ECR_REPOSITORY }}:${{ github.sha }}
+
+      - name: Deploy to Amazon ECS
+        uses: aws-actions/amazon-ecs-deploy-task-definition@v2
+        with:
+          task-definition: ${{ steps.render-task-definition.outputs.task-definition }}
+          cluster: chat-rag-cluster
+          service: chat-rag-api-service
+          wait-for-service-stability: true
+
+      - name: Verify production health
+        env:
+          HEALTH_URL: https://2780017ujg.execute-api.eu-central-1.amazonaws.com/prod/health
+        run: |
+          response="$(curl --fail --silent --show-error --location --retry 5 --retry-delay 10 "$HEALTH_URL")"
+          printf '%s' "$response" | jq --exit-status 'type == "object" and .status == "ok"'
