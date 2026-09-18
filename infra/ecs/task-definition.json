@@ -1,0 +1,55 @@
+{
+  "containerDefinitions": [
+    {
+      "name": "chat-rag-api",
+      "image": "385740679214.dkr.ecr.eu-central-1.amazonaws.com/chat-rag-api@sha256:62402c3d7a8ce59379fef59e8d8c60fafbb92fa36813433828a1b56c0c0b3c5e",
+      "cpu": 1024,
+      "memory": 2048,
+      "portMappings": [
+        {
+          "containerPort": 8000,
+          "hostPort": 8000,
+          "protocol": "tcp",
+          "name": "chat-rag-api-8000-tcp",
+          "appProtocol": "http"
+        }
+      ],
+      "essential": true,
+      "environment": [],
+      "environmentFiles": [],
+      "mountPoints": [],
+      "volumesFrom": [],
+      "secrets": [
+        {
+          "name": "OPENAI_API_KEY",
+          "valueFrom": "arn:aws:secretsmanager:eu-central-1:385740679214:secret:chat-rag/openai-teyZN5:OPENAI_API_KEY::"
+        }
+      ],
+      "ulimits": [],
+      "logConfiguration": {
+        "logDriver": "awslogs",
+        "options": {
+          "awslogs-group": "/ecs/chat-rag-api",
+          "awslogs-region": "eu-central-1",
+          "awslogs-stream-prefix": "ecs"
+        },
+        "secretOptions": []
+      },
+      "systemControls": []
+    }
+  ],
+  "family": "chat-rag-api",
+  "taskRoleArn": "arn:aws:iam::385740679214:role/chat-rag-ecs-task",
+  "executionRoleArn": "arn:aws:iam::385740679214:role/chat-rag-ecs-task-execution",
+  "networkMode": "awsvpc",
+  "volumes": [],
+  "placementConstraints": [],
+  "runtimePlatform": {
+    "cpuArchitecture": "X86_64",
+    "operatingSystemFamily": "LINUX"
+  },
+  "requiresCompatibilities": ["FARGATE"],
+  "cpu": "1024",
+  "memory": "2048",
+  "enableFaultInjection": false
+}

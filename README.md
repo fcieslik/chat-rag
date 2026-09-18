@@ -125,3 +125,49 @@ ECS Service: update → nowa revision
 ECS uruchamia nowy task
 ↓
 ALB kieruje ruch do nowego taska
+
+Ta ręczna procedura pozostaje fallbackiem diagnostycznym. Normalny deployment produkcyjny wykonuje GitHub Actions.
+
+## Automatyczny deployment API
+
+Workflow znajduje się w `.github/workflows/deploy-api.yml`.
+
+### Feature branches
+
+Push do `feature/**` uruchamia tylko walidację repozytorium:
+
+```bash
+pnpm test
+pnpm typecheck:api
+pnpm typecheck:web
+pnpm build:api
+pnpm build:web
+```
+
+Feature branch nie konfiguruje AWS, nie loguje się do ECR, nie wysyła obrazu i nie aktualizuje ECS.
+
+Zmiany zawierające wyłącznie `docs/agents/**`, `.scratch/**`, `AGENTS.md` lub `CLAUDE.md` są pomijane przez workflow. Commit mieszany, zawierający także kod API albo konfigurację deploymentu, uruchamia workflow normalnie.
+
+### `main`
+
+Push do `main` musi najpierw przejść tę samą walidację. Następnie workflow:
+
+1. używa GitHub OIDC do przyjęcia istniejącej roli `chat-rag-github-actions`,
+2. buduje obraz API i wysyła go do ECR z tagiem `${GITHUB_SHA}`,
+3. ładuje `infra/ecs/task-definition.json`,
+4. zmienia wyłącznie `image` kontenera `chat-rag-api`,
+5. rejestruje nową revision Task Definition,
+6. aktualizuje service `chat-rag-api-service` w clusterze `chat-rag-cluster`,
+7. czeka na stabilność ECS,
+8. wykonuje smoke test przez `GET /prod/health`.
+
+Task Definition pozostaje źródłem prawdy w Git. Referencja `secrets.valueFrom` pozostaje bez zmian, a GitHub Actions nie otrzymuje wartości sekretu.
+
+Oczekiwany smoke test:
+
+```text
+GET https://2780017ujg.execute-api.eu-central-1.amazonaws.com/prod/health
+→ {"status":"ok"}
+```
+
+ECS używa istniejącego deployment circuit breaker z rollbackiem. Jeżeli nowe taski nie przejdą health checków ECS/ALB, deployment powinien zostać oznaczony jako nieudany i wycofany do ostatniej udanej revision. Błąd smoke testu po uzyskaniu stabilności ECS oznacza nieudany workflow, ale sam nie uruchamia circuit breakera.

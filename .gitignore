@@ -8,3 +8,4 @@ dist/
 
 # Safe templates may be committed.
 !**/.env.example
+.orchestrator/runs/
