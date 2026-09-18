@@ -21,7 +21,7 @@ jobs:
     runs-on: ubuntu-latest
 
     outputs:
-      productionChanges: ${{ steps.production-changes.outputs.deploy }}
+      apiDeploymentChanges: ${{ steps.api-deployment-changes.outputs.deploy }}
 
     permissions:
       contents: read
@@ -61,8 +61,8 @@ jobs:
       - name: Build web
         run: pnpm build:web
 
-      - name: Detect production changes
-        id: production-changes
+      - name: Detect API deployment changes
+        id: api-deployment-changes
         env:
           BEFORE_SHA: ${{ github.event.before }}
           CURRENT_SHA: ${{ github.sha }}
@@ -76,6 +76,7 @@ jobs:
           deploy=false
           while IFS= read -r path; do
             case "$path" in
+              # Only API source or deployment inputs should publish a production image.
               apps/api/*|infra/*|.github/workflows/deploy-api.yml|package.json|pnpm-lock.yaml|pnpm-workspace.yaml)
                 deploy=true
                 break
@@ -87,7 +88,7 @@ jobs:
 
   deploy:
     needs: validate
-    if: github.ref == 'refs/heads/main' && needs.validate.outputs.productionChanges == 'true'
+    if: github.ref == 'refs/heads/main' && needs.validate.outputs.apiDeploymentChanges == 'true'
     runs-on: ubuntu-latest
 
     permissions:

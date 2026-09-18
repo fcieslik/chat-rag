@@ -28,14 +28,14 @@ No additional AWS setup is required. The workflow must consume these resources a
 
 ## Solution
 
-Feature branch pushes run repository validation and stop before AWS. A push to `main` must pass the same validation, build and publish an immutable API image tagged with the commit SHA, render that image into `infra/ecs/task-definition.json`, register a new Task Definition revision, update the existing ECS service, wait for stability, and verify `GET /prod/health`.
+Feature branch pushes run repository validation and stop before AWS. A push to `main` must pass the same validation. Frontend-only, tests-only, and other non-API changes stop after validation; only changes to API source or deployment-relevant inputs build and publish an immutable API image tagged with the commit SHA, render that image into `infra/ecs/task-definition.json`, register a new Task Definition revision, update the existing ECS service, wait for stability, and verify `GET /prod/health`.
 
 The Task Definition remains the source of truth in Git. The workflow changes only the API container image; Secrets Manager `valueFrom` references and all other runtime settings remain unchanged.
 
 ## Scope
 
 - Feature branches: tests, type checks, and builds only; no OIDC, ECR, or ECS access.
-- `main`: validation, Docker build, ECR push, Task Definition render/register, ECS update, stability wait, and API Gateway smoke test.
+- `main`: validation for every workflow-triggering change; Docker build, ECR push, Task Definition render/register, ECS update, stability wait, and API Gateway smoke test only when API source or deployment-relevant inputs change.
 - Excluded-only changes: `docs/agents/**`, `.scratch/**`, `AGENTS.md`, and `CLAUDE.md` do not start the workflow.
 - Mixed changes containing application or deployment files are not skipped.
 - Existing manual ECS deployment instructions in `README.md` remain available as a fallback; automatic deployment documentation is appended.
@@ -45,6 +45,7 @@ The Task Definition remains the source of truth in Git. The workflow changes onl
 - Use the existing `.github/workflows/deploy-api.yml` as the CI/CD boundary.
 - Use existing scripts: `pnpm test`, `pnpm typecheck:api`, `pnpm typecheck:web`, `pnpm build:api`, and `pnpm build:web`.
 - Give only the deployment job `id-token: write`; validation has only `contents: read`.
+- Detect API deployment changes from `apps/api/**`, `infra/**`, the API workflow, and the root package manifests/lockfile; frontend-only, tests-only, and other non-API changes must leave the deployment job skipped after validation.
 - Keep `main` as the only production deployment branch and do not create staging infrastructure.
 - Use `aws-actions/amazon-ecs-render-task-definition` to replace only the `chat-rag-api` image.
 - Use `aws-actions/amazon-ecs-deploy-task-definition` with `wait-for-service-stability: true`.
@@ -56,6 +57,7 @@ The Task Definition remains the source of truth in Git. The workflow changes onl
 - Validate workflow YAML and action inputs statically.
 - Verify feature branches never configure AWS, log in to ECR, push images, register Task Definitions, or update ECS.
 - Verify `main` deployment depends on successful validation.
+- Verify frontend-only, tests-only, and other non-API `main` changes run validation without starting production deployment, while API or deployment-relevant changes start it.
 - Verify the rendered Task Definition changes only `image` and preserves `valueFrom`.
 - Verify ECS deployment receives the confirmed cluster, service, and Task Definition.
 - Verify the smoke test runs after ECS stability and expects HTTP success plus `{"status":"ok"}`.
