@@ -4,6 +4,11 @@ on:
   push:
     branches:
       - main
+    paths-ignore:
+      - docs/agents/**
+      - .scratch/**
+      - AGENTS.md
+      - CLAUDE.md
 
 env:
   AWS_REGION: eu-central-1
