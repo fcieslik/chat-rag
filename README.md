@@ -128,6 +128,13 @@ ALB kieruje ruch do nowego taska
 
 Ta ręczna procedura pozostaje fallbackiem diagnostycznym. Normalny deployment produkcyjny wykonuje GitHub Actions.
 
+Jeśli automatyczny deployment jest niedostępny, wykonaj ten fallback w AWS Console:
+
+1. W ECR `chat-rag-api` potwierdź obraz i jego tag lub digest, który ma zostać wdrożony.
+2. W ECS otwórz rodzinę Task Definition `chat-rag-api`, utwórz nową revision i zmień obraz wyłącznie kontenera `chat-rag-api`. Zachowaj pozostałe ustawienia runtime oraz referencje `secrets.valueFrom`.
+3. W klastrze `chat-rag-cluster` otwórz service `chat-rag-api-service`, wybierz nową revision i wykonaj update.
+4. Poczekaj na stabilność service i sprawdź `GET /prod/health` przez API Gateway.
+
 ## Automatyczny deployment API
 
 Workflow znajduje się w `.github/workflows/deploy-api.yml`.
@@ -150,7 +157,9 @@ Zmiany zawierające wyłącznie `docs/agents/**`, `.scratch/**`, `AGENTS.md` lub
 
 ### `main`
 
-Push do `main` musi najpierw przejść tę samą walidację. Następnie workflow:
+Push do `main` musi najpierw przejść tę samą walidację. Dla zmian frontend-only, tests-only i innych zmian niezwiązanych z API workflow kończy się po walidacji. Deployment uruchamia się dla zmian w `apps/api/**`, `infra/**`, tym workflow albo głównych manifestach pakietów.
+
+Dla takich zmian workflow:
 
 1. używa GitHub OIDC do przyjęcia istniejącej roli `chat-rag-github-actions`,
 2. buduje obraz API i wysyła go do ECR z tagiem `${GITHUB_SHA}`,
