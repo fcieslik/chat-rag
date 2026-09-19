@@ -5,6 +5,7 @@ WORKDIR /app
 RUN corepack enable
 
 COPY package.json pnpm-lock.yaml pnpm-workspace.yaml ./
+COPY patches patches
 COPY apps/api/package.json apps/api/package.json
 
 RUN pnpm install --filter @chat-rag/api... --prod=false --frozen-lockfile
@@ -22,6 +23,7 @@ WORKDIR /app
 RUN corepack enable
 
 COPY package.json pnpm-lock.yaml pnpm-workspace.yaml ./
+COPY patches patches
 COPY apps/api/package.json apps/api/package.json
 
 RUN pnpm install --filter @chat-rag/api --prod --frozen-lockfile
