@@ -9,6 +9,12 @@ services:
       COGNITO_CLIENT_ID: 5ok5j2hpla2be0gorpdblpheuv
       NODE_ENV: production
       OPENAI_API_KEY: ${OPENAI_API_KEY:?Set OPENAI_API_KEY in .env.local}
+      AWS_REGION: eu-central-1
+      AWS_ACCESS_KEY_ID: ${AWS_ACCESS_KEY_ID:-}
+      AWS_SECRET_ACCESS_KEY: ${AWS_SECRET_ACCESS_KEY:-}
+      AWS_SESSION_TOKEN: ${AWS_SESSION_TOKEN:-}
+      BEDROCK_GUARDRAIL_ID: wrbzgwf3rz1e
+      BEDROCK_GUARDRAIL_VERSION: "1"
     ports:
       - "8000:8000"
     healthcheck:

@@ -4,6 +4,22 @@ This context describes the production deployment boundary for the Chat RAG API.
 
 ## Deployment language
 
+**Input guardrail**:
+A Bedrock safety policy evaluated against a chat message before the message is sent to the language model.
+_Avoid_: prompt filter, moderation check
+
+**Guardrail intervention**:
+The decision that an input guardrail has blocked a chat message.
+_Avoid_: model refusal, validation error
+
+**Guardrail evaluation**:
+A repeatable check of a versioned guardrail policy against a dataset of inputs and explicit expected detections.
+_Avoid_: model evaluation, prompt test
+
+**Guardrail result**:
+The application-owned, structured record of a guardrail evaluation, containing its action, detected policy signals, and latency.
+_Avoid_: AWS SDK response, raw assessment
+
 **Task Definition**:
 The versioned ECS configuration that describes how the API container runs, including its image reference, runtime settings, logging, roles, and secret references.
 _Avoid_: ECS task, container definition (when referring to the complete configuration)

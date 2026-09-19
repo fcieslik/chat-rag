@@ -46,6 +46,44 @@ Open [http://localhost:5173](http://localhost:5173), sign in, and use the chat. 
 
 The frontend Cognito defaults match the current User Pool. For another environment, copy `apps/web/.env.example` to `apps/web/.env.local` and set the `VITE_COGNITO_*` values. The Cognito app client must be a public client using Authorization Code Grant with PKCE, and must allow `http://localhost:5173` as callback and sign-out URLs.
 
+### Testing Bedrock Guardrails locally
+
+To run the frontend and API directly from terminals, first authenticate through AWS SSO with a profile that can call `bedrock:ApplyGuardrail` for guardrail `wrbzgwf3rz1e`:
+
+```bash
+aws sso login --profile YOUR_AWS_PROFILE
+aws sts get-caller-identity --profile YOUR_AWS_PROFILE
+```
+
+Copy `docker-compose.local.env.example` to the root `.env.local`, set `OPENAI_API_KEY`, and add the SSO profile and Bedrock configuration:
+
+```env
+AWS_PROFILE=YOUR_AWS_PROFILE
+AWS_REGION=eu-central-1
+BEDROCK_GUARDRAIL_ID=wrbzgwf3rz1e
+BEDROCK_GUARDRAIL_VERSION=1
+```
+
+Start the API in the first terminal. The API does not load `.env.local` by itself, so export it into the shell first:
+
+```bash
+set -a
+source .env.local
+set +a
+test -n "$OPENAI_API_KEY" && echo "OPENAI_API_KEY is set" || echo "OPENAI_API_KEY is missing"
+pnpm dev:api
+```
+
+Run these commands from the repository root. If the API was already running, stop it and start it again after exporting the file; environment variables are read when the process starts.
+
+Start Vite in a second terminal:
+
+```bash
+VITE_CHAT_API_URL= VITE_API_URL= pnpm dev:web
+```
+
+Open [http://localhost:5173](http://localhost:5173) and sign in. Empty Vite variables make the browser send `POST /v1/chat` to Vite, which proxies the request to the local API at `http://localhost:8000/v1/chat`. A permitted message streams the OpenAI response; a message blocked by the guardrail streams one of the API's five fallback messages and never reaches OpenAI. A `503 Bedrock Guardrail is unavailable` response means the SSO profile lacks `bedrock:ApplyGuardrail`, its SSO session expired, or the guardrail is unavailable in `eu-central-1`.
+
 ## Testing the AWS API from the frontend
 
 The file `apps/web/.env.local` contains the configured API Gateway endpoint:
@@ -109,6 +147,20 @@ pnpm build:web
 The generated static files are in `apps/web/dist/` and can be uploaded to S3.
 
 The production CloudFront/custom-domain origin must be registered in Cognito as both an allowed callback URL and an allowed sign-out URL. The API/ECS environment must include `COGNITO_ISSUER`, `COGNITO_CLIENT_ID`, and the frontend origins in `FRONTEND_ORIGINS`.
+
+The Task Definition also configures the non-secret Bedrock Guardrail variables `AWS_REGION`, `BEDROCK_GUARDRAIL_ID`, and `BEDROCK_GUARDRAIL_VERSION`. The ECS task role needs an IAM policy allowing `bedrock:ApplyGuardrail` for the configured guardrail; this role policy is managed outside this repository. `OPENAI_API_KEY` remains the only value stored in Secrets Manager.
+
+Attach this statement to `chat-rag-ecs-task` in AWS before deploying:
+
+```json
+{
+  "Effect": "Allow",
+  "Action": "bedrock:ApplyGuardrail",
+  "Resource": "arn:aws:bedrock:eu-central-1:385740679214:guardrail/wrbzgwf3rz1e"
+}
+```
+
+For local Docker Compose, set AWS credentials (including `AWS_SESSION_TOKEN` when using temporary credentials) in the ignored `.env.local`. ECS uses its task role instead, so no AWS credentials belong in the image or Secrets Manager for this integration.
 
 ## co zrobic po nowym obrazie
 

@@ -15,7 +15,20 @@
         }
       ],
       "essential": true,
-      "environment": [],
+      "environment": [
+        {
+          "name": "AWS_REGION",
+          "value": "eu-central-1"
+        },
+        {
+          "name": "BEDROCK_GUARDRAIL_ID",
+          "value": "wrbzgwf3rz1e"
+        },
+        {
+          "name": "BEDROCK_GUARDRAIL_VERSION",
+          "value": "1"
+        }
+      ],
       "environmentFiles": [],
       "mountPoints": [],
       "volumesFrom": [],
