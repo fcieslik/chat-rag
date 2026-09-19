@@ -84,6 +84,22 @@ pnpm eval:guardrails
 
 The command sends each checked-in synthetic case exactly once to Guardrail `wrbzgwf3rz1e`, version `1`. It does not require `OPENAI_API_KEY`; a failure indicates an unavailable AWS session/service or a changed expected Guardrail result that must be reviewed before updating the corpus.
 
+### Guardrail evaluations in GitHub Actions
+
+Every existing `main` and `feature/**` push runs the separate blocking `guardrail-evaluation` job before a production deployment. It assumes `chat-rag-github-actions` through GitHub OIDC and receives only the non-secret region, guardrail identifier, and immutable version `1`; no AWS credential or OpenAI key is stored in GitHub.
+
+Before enabling the job, attach this least-privilege policy to `chat-rag-github-actions` outside this repository:
+
+```json
+{
+  "Effect": "Allow",
+  "Action": "bedrock:ApplyGuardrail",
+  "Resource": "arn:aws:bedrock:eu-central-1:385740679214:guardrail/wrbzgwf3rz1e"
+}
+```
+
+An OIDC, Bedrock, or evaluation assertion failure fails CI. If AWS-managed Guardrail behavior changes intentionally, first reproduce it locally with the SSO workflow above, then review and commit the corresponding synthetic-case baseline update; CI never accepts a changed result automatically.
+
 Start Vite in a second terminal:
 
 ```bash
