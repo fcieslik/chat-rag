@@ -76,6 +76,14 @@ pnpm dev:api
 
 Run these commands from the repository root. If the API was already running, stop it and start it again after exporting the file; environment variables are read when the process starts.
 
+To evaluate the Guardrail directly, without starting the API, frontend, HTTP, or SSE flow, run this in the same shell after the SSO login and `.env.local` export:
+
+```bash
+pnpm eval:guardrails
+```
+
+The command sends each checked-in synthetic case exactly once to Guardrail `wrbzgwf3rz1e`, version `1`. It does not require `OPENAI_API_KEY`; a failure indicates an unavailable AWS session/service or a changed expected Guardrail result that must be reviewed before updating the corpus.
+
 Start Vite in a second terminal:
 
 ```bash

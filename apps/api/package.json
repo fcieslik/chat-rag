@@ -7,7 +7,8 @@
     "build": "tsc",
     "start": "node dist/server.js",
     "typecheck": "tsc --noEmit",
-    "test": "vitest run"
+    "test": "vitest run",
+    "eval:guardrails": "DEEPEVAL_TELEMETRY_OPT_OUT=1 GUARDRAIL_EVALUATION_RUN=1 vitest run"
   },
   "dependencies": {
     "@aws-sdk/client-bedrock-runtime": "^3.996.0",

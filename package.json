@@ -13,7 +13,11 @@
     "typecheck:web": "pnpm --filter @chat-rag/web typecheck",
     "test:web": "pnpm --filter @chat-rag/web test -- --config vitest.config.ts",
     "test": "pnpm test:api && pnpm test:web",
+    "eval:guardrails": "pnpm --filter @chat-rag/api eval:guardrails",
     "compose:local:up": "docker compose --env-file .env.local -f docker-compose.local.yml up --build",
     "compose:local:down": "docker compose --env-file .env.local -f docker-compose.local.yml down"
+  },
+  "devDependencies": {
+    "deepeval": "0.9.16"
   }
 }

@@ -1,6 +1,7 @@
 node_modules/
 .pnpm-store/
 dist/
+.deepeval/
 
 # Local environment files in any workspace package.
 **/.env

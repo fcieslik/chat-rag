@@ -1,0 +1,18 @@
+diff --git a/dist/telemetry.js b/dist/telemetry.js
+--- a/dist/telemetry.js
++++ b/dist/telemetry.js
+@@ -1,4 +1,5 @@
+ "use strict";
++module.exports = require("./telemetry/index.js");
+ var __createBinding = (this && this.__createBinding) || (Object.create ? (function(o, m, k, k2) {
+     if (k2 === undefined) k2 = k;
+     var desc = Object.getOwnPropertyDescriptor(m, k);
+@@ -45,7 +46,7 @@
+ const sdk_trace_node_1 = require("@opentelemetry/sdk-trace-node");
+ const exporter_trace_otlp_grpc_1 = require("@opentelemetry/exporter-trace-otlp-grpc");
+ const posthog_node_1 = require("posthog-node");
+-const node_1 = __importDefault(require("@sentry/node"));
++const node_1 = { default: { init: () => undefined } };
+ const utils_1 = require("./config/utils");
+ const logger_1 = require("./logger");
+ var Feature;

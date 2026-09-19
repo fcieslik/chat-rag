@@ -3,3 +3,5 @@ packages:
   - packages/*
 allowBuilds:
   esbuild: true
+patchedDependencies:
+  deepeval@0.9.16: patches/deepeval@0.9.16.patch
