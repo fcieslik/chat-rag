@@ -84,6 +84,46 @@ pnpm eval:guardrails
 
 The command sends each checked-in synthetic case exactly once to Guardrail `wrbzgwf3rz1e`, version `1`. It does not require `OPENAI_API_KEY`; a failure indicates an unavailable AWS session/service or a changed expected Guardrail result that must be reviewed before updating the corpus.
 
+### How Guardrail evaluations work
+
+These are component evaluations of `GuardrailService`, not end-to-end chat tests. DeepEval runs the checked-in cases and reports their result, while AWS Bedrock Guardrails makes the actual safety decision. The custom metrics do not call an LLM or send an additional request to AWS.
+
+```text
+synthetic prompt
+      |
+      v
+GuardrailService.evaluate(prompt)
+      |  one ApplyGuardrail request
+      v
+AWS Bedrock Guardrail v1
+      |
+      v
+GuardrailResult (action, detected filters, PII, topics, latency)
+      |
+      v
+DeepEval test case
+      |
+      +-- GuardrailActionMetric
+      |     expected: NONE or GUARDRAIL_INTERVENED
+      |
+      +-- GuardrailContentFilterMetric
+            expected: e.g. VIOLENCE
+      |
+      v
+PASS or FAIL
+```
+
+| Component | Responsibility |
+| --- | --- |
+| `GuardrailService` | Owns the AWS SDK call and returns the application-owned `GuardrailResult`. |
+| AWS Bedrock Guardrails | Evaluates the prompt and returns the actual safety decision. |
+| `GuardrailActionMetric` | Deterministically compares the returned action with the expected action. |
+| `GuardrailContentFilterMetric` | Requires every expected filter to be detected, while allowing additional valid detections. |
+| DeepEval | Provides the test-case and custom-metric interfaces and turns metric outcomes into PASS/FAIL. It does not use an LLM judge here. |
+| GitHub Actions | Runs all 12 cases using OIDC and blocks CI on an AWS, assertion, or credentials failure. |
+
+The baseline has six safe prompts expected to return `NONE` and six blocked prompts that target `VIOLENCE`, `PROMPT_ATTACK`, `MISCONDUCT`, `HATE`, `SEXUAL`, and `INSULTS`. For example, a `VIOLENCE` case passes when AWS also returns `MISCONDUCT`; the expected filter must be present, but the detected set does not need to match exactly.
+
 ### Guardrail evaluations in GitHub Actions
 
 Every existing `main` and `feature/**` push runs the separate blocking `guardrail-evaluation` job before a production deployment. It assumes `chat-rag-github-actions` through GitHub OIDC and receives only the non-secret region, guardrail identifier, and immutable version `1`; no AWS credential or OpenAI key is stored in GitHub.
