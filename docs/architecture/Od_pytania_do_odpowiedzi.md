@@ -1,4 +1,4 @@
-# Droga od zapytania do odpowiedzi
+# Droga od zapytania do odpowiedzi (proponowane usprawnienia na kazdy etap)
 
 Architektura czatu AI na AWS. Dwanaście kroków od wiadomości użytkownika do odpowiedzi na ekranie.
 
