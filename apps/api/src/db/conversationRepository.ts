@@ -6,6 +6,23 @@ export interface CreatedFirstTurn {
   assistantMessageId: bigint;
 }
 
+export interface StoredConversation {
+  id: bigint;
+  title: string | null;
+  createdAt: Date;
+  activityAt: Date;
+}
+
+export interface StoredMessage {
+  id: bigint;
+  role: "user" | "assistant" | "system";
+  status: "pending" | "complete" | "error" | "aborted";
+  content: string;
+  metadata: Record<string, unknown>;
+  replyToMessageId: bigint | null;
+  createdAt: Date;
+}
+
 export interface ConversationRepository {
   createFirstTurn(input: {
     cognitoSubject: string;
@@ -14,6 +31,9 @@ export interface ConversationRepository {
     assistantMetadata: Record<string, string>;
   }): Promise<CreatedFirstTurn>;
   completeAssistantMessage(assistantMessageId: bigint, content: string): Promise<void>;
+  listOwnedConversations(cognitoSubject: string): Promise<StoredConversation[]>;
+  getOwnedConversation(cognitoSubject: string, conversationId: bigint): Promise<StoredConversation | undefined>;
+  listOwnedMessages(cognitoSubject: string, conversationId: bigint): Promise<StoredMessage[] | undefined>;
   close(): Promise<void>;
 }
 
@@ -71,6 +91,33 @@ export function createConversationRepository(
         "update messages set status = 'complete', content = $2 where id = $1 and status = 'pending'",
         [assistantMessageId, content],
       );
+    },
+
+    async listOwnedConversations(cognitoSubject) {
+      const result = await pool.query<StoredConversation>(
+        "select c.id, c.title, c.created_at as \"createdAt\", c.activity_at as \"activityAt\" from conversations c join users u on u.id = c.user_id where u.cognito_subject = $1 and c.deleted_at is null order by c.activity_at desc, c.id desc limit 20",
+        [cognitoSubject],
+      );
+      return result.rows;
+    },
+
+    async getOwnedConversation(cognitoSubject, conversationId) {
+      const result = await pool.query<StoredConversation>(
+        "select c.id, c.title, c.created_at as \"createdAt\", c.activity_at as \"activityAt\" from conversations c join users u on u.id = c.user_id where u.cognito_subject = $1 and c.id = $2 and c.deleted_at is null",
+        [cognitoSubject, conversationId],
+      );
+      return result.rows[0];
+    },
+
+    async listOwnedMessages(cognitoSubject, conversationId) {
+      const result = await pool.query<StoredMessage & { conversation_id: bigint }>(
+        "select m.id, m.role, m.status, m.content, m.metadata, m.reply_to_message_id as \"replyToMessageId\", m.created_at as \"createdAt\" from conversations c join users u on u.id = c.user_id left join messages m on m.conversation_id = c.id where u.cognito_subject = $1 and c.id = $2 and c.deleted_at is null order by m.created_at asc nulls first, m.id asc nulls first",
+        [cognitoSubject, conversationId],
+      );
+      if (result.rowCount === 0) {
+        return undefined;
+      }
+      return result.rows.filter((message) => message.id !== null);
     },
 
     async close() {

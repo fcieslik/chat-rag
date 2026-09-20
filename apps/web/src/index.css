@@ -36,6 +36,15 @@ button { cursor: pointer; }
   box-shadow: 0 24px 80px #0008;
 }
 
+.conversation-sidebar { width: 220px; flex: none; padding: 18px; border-right: 1px solid #2d2d35; background: #15151a; }
+.conversation-sidebar button { width: 100%; min-height: 40px; padding: 8px 10px; text-align: left; }
+.conversation-sidebar > button { text-align: center; }
+.conversation-sidebar p { margin: 18px 0; color: #85858f; font-size: 13px; }
+.conversation-sidebar ul { display: grid; gap: 6px; padding: 12px 0 0; margin: 0; list-style: none; }
+.conversation-sidebar li button { overflow: hidden; background: transparent; color: #c9c9d1; font-size: 13px; font-weight: 500; text-overflow: ellipsis; white-space: nowrap; }
+.conversation-sidebar li button:hover:not(:disabled), .conversation-sidebar li .conversation-selected { background: #322a4e; color: #f2eeff; }
+.chat-content { display: flex; flex: 1; flex-direction: column; min-width: 0; }
+
 .chat-header {
   display: flex;
   align-items: center;
@@ -90,4 +99,5 @@ button:disabled { cursor: not-allowed; opacity: .4; }
   .composer { padding-left: 20px; padding-right: 20px; }
   .composer-hint { padding-left: 20px; padding-right: 20px; }
   .message { max-width: 92%; }
+  .conversation-sidebar { width: 170px; padding: 12px; }
 }

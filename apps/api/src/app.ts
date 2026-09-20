@@ -61,7 +61,7 @@ export function createApp(options: AppOptions = {}) {
   app.use(
     cors({
       origin: allowedOrigins,
-      methods: ["POST", "OPTIONS"],
+      methods: ["GET", "POST", "OPTIONS"],
       allowedHeaders: ["Content-Type", "Authorization"],
       optionsSuccessStatus: 204,
     }),
@@ -72,6 +72,66 @@ export function createApp(options: AppOptions = {}) {
   app.get("/health", (_request, response) => {
     response.json({ status: "ok" });
   });
+
+  app.get(
+    "/v1/conversations",
+    requireAccessToken(verifyAccessToken),
+    async (_request, response) => {
+      const auth = response.locals.auth as { sub: string };
+      try {
+        const conversations = await conversationRepository.listOwnedConversations(auth.sub);
+        response.json({ conversations: conversations.map(serializeConversation) });
+      } catch {
+        response.status(500).json({ error: "Could not load Conversations." });
+      }
+    },
+  );
+
+  app.get(
+    "/v1/conversations/:conversationId",
+    requireAccessToken(verifyAccessToken),
+    async (request, response) => {
+      const conversationId = parseConversationId(request.params.conversationId);
+      if (conversationId === undefined) {
+        response.status(404).json({ error: "Conversation not found." });
+        return;
+      }
+      const auth = response.locals.auth as { sub: string };
+      try {
+        const conversation = await conversationRepository.getOwnedConversation(auth.sub, conversationId);
+        if (!conversation) {
+          response.status(404).json({ error: "Conversation not found." });
+          return;
+        }
+        response.json({ conversation: serializeConversation(conversation) });
+      } catch {
+        response.status(500).json({ error: "Could not load Conversation." });
+      }
+    },
+  );
+
+  app.get(
+    "/v1/conversations/:conversationId/messages",
+    requireAccessToken(verifyAccessToken),
+    async (request, response) => {
+      const conversationId = parseConversationId(request.params.conversationId);
+      if (conversationId === undefined) {
+        response.status(404).json({ error: "Conversation not found." });
+        return;
+      }
+      const auth = response.locals.auth as { sub: string };
+      try {
+        const messages = await conversationRepository.listOwnedMessages(auth.sub, conversationId);
+        if (!messages) {
+          response.status(404).json({ error: "Conversation not found." });
+          return;
+        }
+        response.json({ messages: messages.map(serializeMessage) });
+      } catch {
+        response.status(500).json({ error: "Could not load Messages." });
+      }
+    },
+  );
 
   app.post(
     "/v1/conversations",
@@ -342,6 +402,51 @@ function isUuid(value: unknown): value is string {
       value,
     )
   );
+}
+
+function parseConversationId(value: unknown): bigint | undefined {
+  if (typeof value !== "string" || !/^\d+$/.test(value)) {
+    return undefined;
+  }
+  try {
+    return BigInt(value);
+  } catch {
+    return undefined;
+  }
+}
+
+function serializeConversation(conversation: {
+  id: bigint;
+  title: string | null;
+  createdAt: Date;
+  activityAt: Date;
+}) {
+  return {
+    id: conversation.id.toString(),
+    title: conversation.title,
+    createdAt: conversation.createdAt.toISOString(),
+    activityAt: conversation.activityAt.toISOString(),
+  };
+}
+
+function serializeMessage(message: {
+  id: bigint;
+  role: string;
+  status: string;
+  content: string;
+  metadata: Record<string, unknown>;
+  replyToMessageId: bigint | null;
+  createdAt: Date;
+}) {
+  return {
+    id: message.id.toString(),
+    role: message.role,
+    status: message.status,
+    content: message.content,
+    metadata: message.metadata,
+    replyToMessageId: message.replyToMessageId?.toString() ?? null,
+    createdAt: message.createdAt.toISOString(),
+  };
 }
 
 function streamGuardrailFallback(response: express.Response): void {

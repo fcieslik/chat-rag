@@ -1,6 +1,24 @@
 const apiUrl = (import.meta.env.VITE_API_URL ?? "").replace(/\/$/, "");
 const chatEndpoint =
   import.meta.env.VITE_CHAT_API_URL?.trim() || `${apiUrl}/v1/chat`;
+const conversationsEndpoint = `${apiUrl}/v1/conversations`;
+
+export interface Conversation {
+  id: string;
+  title: string | null;
+  createdAt: string;
+  activityAt: string;
+}
+
+export interface ConversationMessage {
+  id: string;
+  role: "user" | "assistant" | "system";
+  status: "pending" | "complete" | "error" | "aborted";
+  content: string;
+  metadata: Record<string, unknown>;
+  replyToMessageId: string | null;
+  createdAt: string;
+}
 
 interface ChatStreamEvent {
   delta?: unknown;
@@ -19,6 +37,43 @@ function getErrorMessage(error: unknown): string {
   }
 
   return "The chat request failed.";
+}
+
+async function getJson<T>(url: string, accessToken: string): Promise<T> {
+  if (!accessToken) {
+    throw new Error("Authentication is required.");
+  }
+
+  const response = await fetch(url, {
+    headers: { Authorization: `Bearer ${accessToken}` },
+  });
+
+  if (response.status === 401) {
+    throw new AuthenticationError();
+  }
+  if (!response.ok) {
+    throw new Error("The conversation could not be loaded.");
+  }
+  return response.json() as Promise<T>;
+}
+
+export async function listConversations(accessToken: string): Promise<Conversation[]> {
+  const response = await getJson<{ conversations: Conversation[] }>(
+    conversationsEndpoint,
+    accessToken,
+  );
+  return response.conversations;
+}
+
+export async function listConversationMessages(
+  conversationId: string,
+  accessToken: string,
+): Promise<ConversationMessage[]> {
+  const response = await getJson<{ messages: ConversationMessage[] }>(
+    `${conversationsEndpoint}/${encodeURIComponent(conversationId)}/messages`,
+    accessToken,
+  );
+  return response.messages;
 }
 
 export async function streamChatResponse(
