@@ -4,23 +4,30 @@
   "type": "module",
   "scripts": {
     "dev": "tsx watch src/server.ts",
-    "build": "tsc",
+    "build": "tsc && node scripts/copy-migrations.mjs",
     "start": "node dist/server.js",
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
-    "eval:guardrails": "DEEPEVAL_TELEMETRY_OPT_OUT=1 GUARDRAIL_EVALUATION_RUN=1 vitest run"
+    "eval:guardrails": "DEEPEVAL_TELEMETRY_OPT_OUT=1 GUARDRAIL_EVALUATION_RUN=1 vitest run",
+    "db:generate": "drizzle-kit generate",
+    "db:migrate": "node dist/db/migrate.js",
+    "db:migrate:dev": "tsx src/db/migrate.ts"
   },
   "dependencies": {
     "@aws-sdk/client-bedrock-runtime": "^3.996.0",
     "cors": "^2.8.5",
+    "drizzle-orm": "^0.45.2",
     "express": "^5.1.0",
-    "jose": "^6.2.12"
+    "jose": "^6.2.12",
+    "pg": "^8.23.0"
   },
   "devDependencies": {
     "@types/cors": "^2.8.19",
     "@types/express": "^5.0.3",
     "@types/node": "^22.0.0",
+    "@types/pg": "^8.23.1",
     "@types/supertest": "^7.2.1",
+    "drizzle-kit": "^0.31.10",
     "supertest": "^7.2.2",
     "tsx": "^4.20.6",
     "typescript": "^5.9.2",

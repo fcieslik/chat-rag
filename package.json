@@ -15,7 +15,10 @@
     "test": "pnpm test:api && pnpm test:web",
     "eval:guardrails": "pnpm --filter @chat-rag/api eval:guardrails",
     "compose:local:up": "docker compose --env-file .env.local -f docker-compose.local.yml up --build",
-    "compose:local:down": "docker compose --env-file .env.local -f docker-compose.local.yml down"
+    "compose:local:down": "docker compose --env-file .env.local -f docker-compose.local.yml down",
+    "db:generate": "pnpm --filter @chat-rag/api db:generate",
+    "db:migrate": "pnpm build:api && pnpm --filter @chat-rag/api db:migrate",
+    "db:reset": "scripts/db-reset.sh"
   },
   "devDependencies": {
     "deepeval": "0.9.16"

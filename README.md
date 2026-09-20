@@ -16,6 +16,9 @@ Then start the complete local stack:
 
 ```bash
 pnpm compose:local:up
+
+# Reset only the local Chat RAG PostgreSQL volume and rerun migrations.
+pnpm db:reset
 ```
 
 Open the frontend at [http://localhost:5173](http://localhost:5173) and sign in with a user from the configured Cognito User Pool. The services are:

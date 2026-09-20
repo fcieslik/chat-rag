@@ -11,6 +11,7 @@ COPY apps/api/package.json apps/api/package.json
 RUN pnpm install --filter @chat-rag/api... --prod=false --frozen-lockfile
 
 COPY apps/api/tsconfig.json apps/api/tsconfig.json
+COPY apps/api/scripts apps/api/scripts
 COPY apps/api/src apps/api/src
 
 RUN pnpm --filter @chat-rag/api build

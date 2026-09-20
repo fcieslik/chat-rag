@@ -1,4 +1,23 @@
 services:
+  postgres:
+    image: postgres:18.3-alpine
+    environment:
+      POSTGRES_USER: ${LOCAL_POSTGRES_ADMIN_USER:-chat_rag_admin}
+      POSTGRES_PASSWORD: ${LOCAL_POSTGRES_ADMIN_PASSWORD:-local-admin-password}
+      POSTGRES_DB: postgres
+      LOCAL_MIGRATION_PASSWORD: ${LOCAL_MIGRATION_PASSWORD:-local-migration-password}
+      LOCAL_APP_PASSWORD: ${LOCAL_APP_PASSWORD:-local-app-password}
+    ports:
+      - "${LOCAL_POSTGRES_PORT:-5432}:5432"
+    volumes:
+      - chat-rag-local-postgres-data:/var/lib/postgresql
+      - ./docker/postgres/init-roles.sh:/docker-entrypoint-initdb.d/10-init-roles.sh:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
   api:
     build:
       context: .
@@ -15,6 +34,10 @@ services:
       AWS_SESSION_TOKEN: ${AWS_SESSION_TOKEN:-}
       BEDROCK_GUARDRAIL_ID: wrbzgwf3rz1e
       BEDROCK_GUARDRAIL_VERSION: "1"
+      DATABASE_URL: ${LOCAL_API_DATABASE_URL:-postgresql://chat_rag_app:local-app-password@postgres:5432/postgres?sslmode=disable}
+    depends_on:
+      postgres:
+        condition: service_healthy
     ports:
       - "8000:8000"
     healthcheck:
@@ -38,3 +61,7 @@ services:
         condition: service_healthy
     ports:
       - "5173:80"
+
+volumes:
+  chat-rag-local-postgres-data:
+    name: chat-rag-local-postgres-data
