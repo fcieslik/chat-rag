@@ -1,5 +1,5 @@
 const openAiChatCompletionsUrl = "https://api.openai.com/v1/chat/completions";
-const openAiModel = "gpt-5.6-luna";
+export const openAiModel = "gpt-5.6-luna";
 
 export interface ModelMessage {
   role: "assistant" | "system" | "user";

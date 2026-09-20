@@ -26,6 +26,7 @@ async function createToken(
   return new SignJWT({
     client_id: config.clientId,
     token_use: "access",
+    sub: "cognito-user-1",
     ...claims,
   })
     .setProtectedHeader({ alg: "RS256", kid: "test-key" })

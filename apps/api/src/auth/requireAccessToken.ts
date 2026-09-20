@@ -16,7 +16,12 @@ export function requireAccessToken(verifier: AccessTokenVerifier): RequestHandle
     }
 
     try {
-      response.locals.auth = await verifier(token);
+      const claims = await verifier(token);
+      if (typeof claims.sub !== "string" || claims.sub.trim().length === 0) {
+        unauthorized(response);
+        return;
+      }
+      response.locals.auth = claims;
       next();
     } catch {
       unauthorized(response);

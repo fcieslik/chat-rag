@@ -7,6 +7,7 @@ import type { ModelStreamingService } from "./modelStreaming.js";
 const validClaims = {
   client_id: "client-123",
   token_use: "access" as const,
+  sub: "cognito-user-1",
 };
 
 function createGuardrailService(
@@ -71,6 +72,24 @@ describe("API authentication boundary", () => {
 
     expect(response.status).toBe(401);
     expect(verifyAccessToken).toHaveBeenCalledWith("expired-token");
+    expect(modelStreamingService.start).not.toHaveBeenCalled();
+  });
+
+  it("rejects a verified access token without a Cognito subject", async () => {
+    const verifyAccessToken = vi.fn().mockResolvedValue({
+      client_id: "client-123",
+      token_use: "access" as const,
+    });
+    const modelStreamingService = createModelStreamingService();
+
+    const response = await request(
+      createApp({ verifyAccessToken, modelStreamingService }),
+    )
+      .post("/v1/chat")
+      .set("Authorization", "Bearer token-without-subject")
+      .send({ message: "hello" });
+
+    expect(response.status).toBe(401);
     expect(modelStreamingService.start).not.toHaveBeenCalled();
   });
 

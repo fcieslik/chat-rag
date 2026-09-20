@@ -12,8 +12,13 @@ import {
 import {
   createModelStreamingService,
   ModelStreamingResponseError,
+  openAiModel,
   type ModelStreamingService,
 } from "./modelStreaming.js";
+import {
+  createConversationRepository,
+  type ConversationRepository,
+} from "./db/conversationRepository.js";
 
 const guardrailFallbackMessages = [
   "No nie! Tak to nie gadamy.",
@@ -25,12 +30,14 @@ const guardrailFallbackMessages = [
 
 interface ChatRequestBody {
   message?: unknown;
+  clientMessageId?: unknown;
 }
 
 interface AppOptions {
   verifyAccessToken?: AccessTokenVerifier;
   guardrailService?: GuardrailService;
   modelStreamingService?: ModelStreamingService;
+  conversationRepository?: ConversationRepository;
 }
 
 export function createApp(options: AppOptions = {}) {
@@ -48,6 +55,8 @@ export function createApp(options: AppOptions = {}) {
   const guardrailService = options.guardrailService ?? createGuardrailService();
   const modelStreamingService =
     options.modelStreamingService ?? createModelStreamingService();
+  const conversationRepository =
+    options.conversationRepository ?? createConversationRepository();
 
   app.use(
     cors({
@@ -63,6 +72,124 @@ export function createApp(options: AppOptions = {}) {
   app.get("/health", (_request, response) => {
     response.json({ status: "ok" });
   });
+
+  app.post(
+    "/v1/conversations",
+    requireAccessToken(verifyAccessToken),
+    async (request, response) => {
+      const { message, clientMessageId } = request.body as ChatRequestBody;
+      const normalizedMessage = normalizeMessage(message);
+
+      if (!normalizedMessage || !isUuid(clientMessageId)) {
+        response.status(400).json({
+          error: "The message must be 1–10,000 characters and clientMessageId must be a UUID.",
+        });
+        return;
+      }
+
+      try {
+        const guardrailResult = await guardrailService.evaluate(normalizedMessage);
+        const guardrailIntervened =
+          guardrailResult.action === "GUARDRAIL_INTERVENED";
+
+        console.log("Guardrail check result:", guardrailIntervened);
+
+        if (guardrailIntervened) {
+          streamGuardrailFallback(response);
+          return;
+        }
+      } catch {
+        response
+          .status(503)
+          .json({ error: "Bedrock Guardrail is unavailable." });
+        return;
+      }
+
+      const auth = response.locals.auth as { sub: string };
+      let turn;
+      try {
+        turn = await conversationRepository.createFirstTurn({
+          cognitoSubject: auth.sub,
+          message: normalizedMessage,
+          clientMessageId,
+          assistantMetadata: { model: openAiModel },
+        });
+      } catch {
+        response.status(500).json({ error: "Could not create the Conversation." });
+        return;
+      }
+
+      const abortController = new AbortController();
+      let clientDisconnected = false;
+      const abortIfClientDisconnects = () => {
+        if (!response.writableEnded) {
+          clientDisconnected = true;
+          abortController.abort();
+        }
+      };
+
+      request.on("aborted", abortIfClientDisconnects);
+      response.on("close", abortIfClientDisconnects);
+
+      try {
+        const deltas = await modelStreamingService.start({
+          messages: [{ role: "user", content: normalizedMessage }],
+          signal: abortController.signal,
+        });
+
+        response.status(200);
+        response.setHeader("Content-Type", "text/event-stream; charset=utf-8");
+        response.setHeader("Cache-Control", "no-cache, no-transform");
+        response.setHeader("Connection", "keep-alive");
+        response.flushHeaders();
+        writeSse(response, "turn.started", {
+          conversationId: turn.conversationId.toString(),
+          userMessageId: turn.userMessageId.toString(),
+          assistantMessageId: turn.assistantMessageId.toString(),
+        });
+
+        let content = "";
+        for await (const delta of deltas) {
+          content += delta;
+          writeSse(response, "response.delta", { delta });
+        }
+
+        await conversationRepository.completeAssistantMessage(
+          turn.assistantMessageId,
+          content,
+        );
+        writeSse(response, "response.completed", {});
+        response.end();
+      } catch (error) {
+        if (clientDisconnected || (error instanceof Error && error.name === "AbortError")) {
+          return;
+        }
+
+        if (error instanceof ModelStreamingResponseError && !response.headersSent) {
+          if (error.kind === "request_failed") {
+            response.status(502).json({
+              error: "OpenAI request failed.",
+              details: error.details,
+            });
+            return;
+          }
+          response.status(502).json({ error: "OpenAI returned an empty stream." });
+          return;
+        }
+
+        if (response.headersSent) {
+          writeSse(response, "response.failed", { error: "Streaming failed." });
+          response.end();
+          return;
+        }
+
+        response.status(502).json({ error: "Streaming request to OpenAI failed." });
+      } finally {
+        request.off("aborted", abortIfClientDisconnects);
+        response.off("close", abortIfClientDisconnects);
+      }
+    },
+  );
 
   app.post(
     "/v1/chat",
@@ -196,6 +323,44 @@ export function createApp(options: AppOptions = {}) {
   );
 
   return app;
+}
+
+function normalizeMessage(message: unknown): string | undefined {
+  if (typeof message !== "string") {
+    return undefined;
+  }
+  const normalizedMessage = message.trim();
+  return normalizedMessage.length >= 1 && normalizedMessage.length <= 10_000
+    ? normalizedMessage
+    : undefined;
+}
+
+function isUuid(value: unknown): value is string {
+  return (
+    typeof value === "string" &&
+    /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(
+      value,
+    )
+  );
+}
+
+function streamGuardrailFallback(response: express.Response): void {
+  const fallbackMessage =
+    guardrailFallbackMessages[
+      Math.floor(Math.random() * guardrailFallbackMessages.length)
+    ];
+  response.status(200);
+  response.setHeader("Content-Type", "text/event-stream; charset=utf-8");
+  response.setHeader("Cache-Control", "no-cache, no-transform");
+  response.setHeader("Connection", "keep-alive");
+  response.flushHeaders();
+  response.write(`data: ${JSON.stringify({ delta: fallbackMessage })}\n\n`);
+  response.write("data: [DONE]\n\n");
+  response.end();
+}
+
+function writeSse(response: express.Response, event: string, data: unknown): void {
+  response.write(`event: ${event}\ndata: ${JSON.stringify(data)}\n\n`);
 }
 
 const app = createApp();
