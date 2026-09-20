@@ -9,9 +9,12 @@ import {
   createGuardrailService,
   type GuardrailService,
 } from "./guardrailService.js";
+import {
+  createModelStreamingService,
+  ModelStreamingResponseError,
+  type ModelStreamingService,
+} from "./modelStreaming.js";
 
-const openAiChatCompletionsUrl = "https://api.openai.com/v1/chat/completions";
-const openAiModel = "gpt-5.6-luna";
 const guardrailFallbackMessages = [
   "No nie! Tak to nie gadamy.",
   "Ej, stop! Nie mogę w tym pomóc.",
@@ -24,17 +27,10 @@ interface ChatRequestBody {
   message?: unknown;
 }
 
-interface ChatCompletionChunk {
-  choices?: Array<{
-    delta?: {
-      content?: unknown;
-    };
-  }>;
-}
-
 interface AppOptions {
   verifyAccessToken?: AccessTokenVerifier;
   guardrailService?: GuardrailService;
+  modelStreamingService?: ModelStreamingService;
 }
 
 export function createApp(options: AppOptions = {}) {
@@ -50,6 +46,8 @@ export function createApp(options: AppOptions = {}) {
   const verifyAccessToken =
     options.verifyAccessToken ?? createCognitoAccessTokenVerifier();
   const guardrailService = options.guardrailService ?? createGuardrailService();
+  const modelStreamingService =
+    options.modelStreamingService ?? createModelStreamingService();
 
   app.use(
     cors({
@@ -136,35 +134,10 @@ export function createApp(options: AppOptions = {}) {
       response.on("close", abortIfClientDisconnects);
 
       try {
-        const openAiResponse = await fetch(openAiChatCompletionsUrl, {
-          method: "POST",
-          headers: {
-            Authorization: `Bearer ${apiKey}`,
-            "Content-Type": "application/json",
-          },
-          body: JSON.stringify({
-            model: openAiModel,
-            messages: [{ role: "user", content: message }],
-            stream: true,
-          }),
+        const deltas = await modelStreamingService.start({
+          messages: [{ role: "user", content: message }],
           signal: abortController.signal,
         });
-
-        if (!openAiResponse.ok) {
-          const details = await openAiResponse.text();
-          response.status(502).json({
-            error: "OpenAI request failed.",
-            details,
-          });
-          return;
-        }
-
-        if (!openAiResponse.body) {
-          response
-            .status(502)
-            .json({ error: "OpenAI returned an empty stream." });
-          return;
-        }
 
         response.status(200);
         response.setHeader("Content-Type", "text/event-stream; charset=utf-8");
@@ -172,39 +145,8 @@ export function createApp(options: AppOptions = {}) {
         response.setHeader("Connection", "keep-alive");
         response.flushHeaders();
 
-        const reader = openAiResponse.body.getReader();
-        const decoder = new TextDecoder();
-        let buffer = "";
-
-        while (true) {
-          const { done, value } = await reader.read();
-
-          if (done) {
-            break;
-          }
-
-          buffer += decoder.decode(value, { stream: true });
-          const events = buffer.split(/\r?\n\r?\n/);
-          buffer = events.pop() ?? "";
-
-          for (const event of events) {
-            const data = event
-              .split(/\r?\n/)
-              .filter((line) => line.startsWith("data:"))
-              .map((line) => line.slice("data:".length).trimStart())
-              .join("\n");
-
-            if (!data || data === "[DONE]") {
-              continue;
-            }
-
-            const chunk = JSON.parse(data) as ChatCompletionChunk;
-            const delta = chunk.choices?.[0]?.delta?.content;
-
-            if (typeof delta === "string") {
-              response.write(`data: ${JSON.stringify({ delta })}\n\n`);
-            }
-          }
+        for await (const delta of deltas) {
+          response.write(`data: ${JSON.stringify({ delta })}\n\n`);
         }
 
         response.write("data: [DONE]\n\n");
@@ -214,6 +156,24 @@ export function createApp(options: AppOptions = {}) {
           clientDisconnected ||
           (error instanceof Error && error.name === "AbortError")
         ) {
+          return;
+        }
+
+        if (
+          error instanceof ModelStreamingResponseError &&
+          !response.headersSent
+        ) {
+          if (error.kind === "request_failed") {
+            response.status(502).json({
+              error: "OpenAI request failed.",
+              details: error.details,
+            });
+            return;
+          }
+
+          response
+            .status(502)
+            .json({ error: "OpenAI returned an empty stream." });
           return;
         }
 
