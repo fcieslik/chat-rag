@@ -199,7 +199,25 @@ jobs:
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
 
+      - name: Check ECR image tag
+        id: image
+        run: |
+          image_count="$(aws ecr batch-get-image \
+            --repository-name "$ECR_REPOSITORY" \
+            --image-ids "imageTag=$GITHUB_SHA" \
+            --query 'length(images)' \
+            --output text)"
+          if [ "$image_count" = "1" ]; then
+            echo "exists=true" >> "$GITHUB_OUTPUT"
+          elif [ "$image_count" = "0" ]; then
+            echo "exists=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "Unexpected ECR image count: $image_count" >&2
+            exit 1
+          fi
+
       - name: Build and push Docker image
+        if: steps.image.outputs.exists != 'true'
         uses: docker/build-push-action@v6
         with:
           context: .
