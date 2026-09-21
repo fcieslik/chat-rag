@@ -6,6 +6,10 @@ const defaultClientId = "5ok5j2hpla2be0gorpdblpheuv";
 const defaultCognitoDomain = "https://eu-central-169m0i9j6.auth.eu-central-1.amazoncognito.com";
 const sessionStore = new WebStorageStateStore({ store: window.sessionStorage });
 
+interface SigninState {
+  returnPath?: unknown;
+}
+
 function appOrigin(): string {
   return window.location.origin;
 }
@@ -20,10 +24,25 @@ export const authConfig: AuthProviderProps = {
   automaticSilentRenew: true,
   userStore: sessionStore,
   stateStore: sessionStore,
-  onSigninCallback: () => {
-    window.history.replaceState({}, document.title, window.location.pathname);
-  },
+  onSigninCallback: restoreRouteAfterSignin,
 };
+
+export function restoreRouteAfterSignin(user?: { state?: unknown }): void {
+  const state = isSigninState(user?.state) ? user.state.returnPath : undefined;
+  const path = safeConversationPath(state) ?? safeConversationPath(window.location.pathname) ?? "/";
+  window.history.replaceState({}, document.title, path);
+}
+
+export function safeConversationPath(path: unknown): string | undefined {
+  if (path === "/") return "/";
+  return typeof path === "string" && /^\/conversations\/\d+$/.test(path)
+    ? path
+    : undefined;
+}
+
+function isSigninState(value: unknown): value is SigninState {
+  return typeof value === "object" && value !== null && "returnPath" in value;
+}
 
 export const cognitoLogoutConfig = {
   domain: import.meta.env.VITE_COGNITO_DOMAIN?.trim() || defaultCognitoDomain,

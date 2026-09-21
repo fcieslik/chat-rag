@@ -55,6 +55,7 @@ describe("App authentication boundary", () => {
 
     fireEvent.click(screen.getByRole("button", { name: "Sign in" }));
     expect(auth.signinRedirect).toHaveBeenCalledOnce();
+    expect(auth.signinRedirect).toHaveBeenCalledWith({ state: { returnPath: "/" } });
   });
 
   it("shows an authentication error and lets the user retry", () => {

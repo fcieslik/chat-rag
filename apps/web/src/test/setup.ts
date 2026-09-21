@@ -4,12 +4,14 @@ import { afterEach, vi } from "vitest";
 
 afterEach(() => cleanup());
 
+const browserLocation = window.location;
 Object.defineProperty(window, "location", {
   configurable: true,
   value: {
-    ...window.location,
     origin: "http://localhost:5173",
-    pathname: "/",
+    get pathname() { return browserLocation.pathname; },
+    get search() { return browserLocation.search; },
+    get hash() { return browserLocation.hash; },
     assign: vi.fn(),
   },
 });

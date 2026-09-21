@@ -1,6 +1,8 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
   AuthenticationError,
+  ConversationNotFoundError,
+  getConversation,
   listConversationMessages,
   listConversations,
   streamConversationResponse,
@@ -127,5 +129,28 @@ describe("chat API", () => {
       expect.stringContaining("/42/messages?cursor=message+cursor"),
       expect.anything(),
     );
+  });
+
+  it("loads an owned Conversation by identifier for deep links", async () => {
+    const fetchMock = vi.spyOn(globalThis, "fetch").mockResolvedValue(
+      new Response(JSON.stringify({ conversation: {
+        id: "42",
+        title: "Deep link",
+        createdAt: "2026-01-01T00:00:00.000Z",
+        activityAt: "2026-01-01T00:00:00.000Z",
+      } }), { status: 200 }),
+    );
+
+    await expect(getConversation("42", "access-token-value")).resolves.toMatchObject({ id: "42" });
+    expect(fetchMock).toHaveBeenCalledWith(
+      "/v1/conversations/42",
+      expect.objectContaining({ headers: { Authorization: "Bearer access-token-value" } }),
+    );
+  });
+
+  it("normalizes an inaccessible Conversation as a not-found error", async () => {
+    vi.spyOn(globalThis, "fetch").mockResolvedValue(new Response(null, { status: 404 }));
+
+    await expect(getConversation("42", "access-token-value")).rejects.toBeInstanceOf(ConversationNotFoundError);
   });
 });

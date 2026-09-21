@@ -28,6 +28,13 @@ export interface MessagePage {
   nextCursor?: string;
 }
 
+export class ConversationNotFoundError extends Error {
+  constructor() {
+    super("Conversation not found.");
+    this.name = "ConversationNotFoundError";
+  }
+}
+
 interface ChatStreamEvent {
   delta?: unknown;
   conversationId?: unknown;
@@ -70,10 +77,24 @@ async function getJson<T>(url: string, accessToken: string): Promise<T> {
   if (response.status === 401) {
     throw new AuthenticationError();
   }
+  if (response.status === 404) {
+    throw new ConversationNotFoundError();
+  }
   if (!response.ok) {
     throw new Error("The conversation could not be loaded.");
   }
   return response.json() as Promise<T>;
+}
+
+export async function getConversation(
+  conversationId: string,
+  accessToken: string,
+): Promise<Conversation> {
+  const result = await getJson<{ conversation: Conversation }>(
+    `${conversationsEndpoint}/${encodeURIComponent(conversationId)}`,
+    accessToken,
+  );
+  return result.conversation;
 }
 
 export async function listConversations(

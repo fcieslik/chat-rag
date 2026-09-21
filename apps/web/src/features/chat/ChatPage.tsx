@@ -1,9 +1,11 @@
 import { FormEvent, useEffect, useRef, useState } from "react";
 import {
   AuthenticationError,
+  ConversationNotFoundError,
   type AssistantTerminalStatus,
   type Conversation,
   type ConversationMessage,
+  getConversation,
   listConversationMessages,
   listConversations,
   streamConversationResponse,
@@ -24,7 +26,19 @@ interface ChatPageProps {
   onSignOut: () => void;
 }
 
+type Route =
+  | { kind: "new"; path: "/" }
+  | { kind: "conversation"; id: string; path: string }
+  | { kind: "not-found"; path: string };
+
+interface StreamSession {
+  controller: AbortController;
+  initialPath: string;
+  adoptedConversationId?: string;
+}
+
 export function ChatPage({ accessToken, onAuthenticationFailure, onSignOut }: ChatPageProps) {
+  const [route, setRoute] = useState<Route>(() => readRoute());
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [conversations, setConversations] = useState<Conversation[]>([]);
   const [nextConversationCursor, setNextConversationCursor] = useState<string>();
@@ -33,26 +47,34 @@ export function ChatPage({ accessToken, onAuthenticationFailure, onSignOut }: Ch
   const [isLoadingConversations, setIsLoadingConversations] = useState(true);
   const [isLoadingMoreConversations, setIsLoadingMoreConversations] = useState(false);
   const [isLoadingOlderMessages, setIsLoadingOlderMessages] = useState(false);
+  const [isLoadingConversation, setIsLoadingConversation] = useState(false);
+  const [isNotFound, setIsNotFound] = useState(false);
   const [input, setInput] = useState("");
   const [isStreaming, setIsStreaming] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const abortController = useRef<AbortController | null>(null);
   const selectedConversationIdRef = useRef<string | null>(null);
+  const routeRef = useRef(route);
+  const routeLoadVersion = useRef(0);
+  const adoptedConversationId = useRef<string | null>(null);
+  const streamSession = useRef<StreamSession | null>(null);
+  const isStreamingRef = useRef(false);
   const nextMessageId = useRef(0);
+
+  isStreamingRef.current = isStreaming;
 
   useEffect(() => {
     let active = true;
 
-    async function loadNewestConversation() {
+    async function loadConversations() {
       try {
         const loadedPage = await listConversations(accessToken);
         if (!active) return;
-        setConversations(loadedPage.conversations);
+        setConversations((currentConversations) => mergeById(
+          loadedPage.conversations,
+          currentConversations,
+        ));
         setNextConversationCursor(loadedPage.nextCursor);
-        const newestConversation = loadedPage.conversations[0];
-        if (newestConversation) {
-          await selectConversation(newestConversation.id, active);
-        }
       } catch (requestError) {
         if (active) handleLoadError(requestError);
       } finally {
@@ -60,41 +82,119 @@ export function ChatPage({ accessToken, onAuthenticationFailure, onSignOut }: Ch
       }
     }
 
-    void loadNewestConversation();
+    void loadConversations();
     return () => { active = false; };
   }, [accessToken]);
+
+  useEffect(() => {
+    function handlePopState() {
+      applyRoute(readRoute(), "history");
+    }
+
+    window.addEventListener("popstate", handlePopState);
+    return () => window.removeEventListener("popstate", handlePopState);
+  }, []);
+
+  useEffect(() => {
+    const requestedRoute = route;
+    const loadVersion = routeLoadVersion.current + 1;
+    routeLoadVersion.current = loadVersion;
+
+    if (
+      requestedRoute.kind === "conversation" &&
+      adoptedConversationId.current === requestedRoute.id
+    ) {
+      adoptedConversationId.current = null;
+      setIsNotFound(false);
+      setIsLoadingConversation(false);
+      return;
+    }
+
+    selectedConversationIdRef.current = null;
+    setSelectedConversationId(null);
+    setMessages([]);
+    setNextMessageCursor(undefined);
+    setError(null);
+    setIsNotFound(requestedRoute.kind === "not-found");
+
+    if (requestedRoute.kind !== "conversation") {
+      setIsLoadingConversation(false);
+      return;
+    }
+
+    const conversationId = requestedRoute.id;
+    setIsLoadingConversation(true);
+
+    async function loadConversation() {
+      try {
+        const [conversation, loadedPage] = await Promise.all([
+          getConversation(conversationId, accessToken),
+          listConversationMessages(conversationId, accessToken),
+        ]);
+        if (!isCurrentRoute(requestedRoute.path, loadVersion)) return;
+
+        setConversations((currentConversations) => mergeById(
+          [conversation],
+          currentConversations,
+        ));
+        selectedConversationIdRef.current = conversationId;
+        setSelectedConversationId(conversationId);
+        setMessages(loadedPage.messages.map(toChatMessage));
+        setNextMessageCursor(loadedPage.nextCursor);
+      } catch (requestError) {
+        if (!isCurrentRoute(requestedRoute.path, loadVersion)) return;
+        if (requestError instanceof ConversationNotFoundError) {
+          setIsNotFound(true);
+          setError(null);
+        } else {
+          handleLoadError(requestError);
+        }
+      } finally {
+        if (isCurrentRoute(requestedRoute.path, loadVersion)) {
+          setIsLoadingConversation(false);
+        }
+      }
+    }
+
+    void loadConversation();
+  }, [accessToken, route]);
 
   function handleLoadError(requestError: unknown) {
     if (requestError instanceof AuthenticationError) onAuthenticationFailure();
     setError(requestError instanceof Error ? requestError.message : "The conversation could not be loaded.");
   }
 
-  async function selectConversation(conversationId: string, active = true) {
-    selectedConversationIdRef.current = conversationId;
-    try {
-      const loadedPage = await listConversationMessages(conversationId, accessToken);
-      if (!active || selectedConversationIdRef.current !== conversationId) return;
-      setSelectedConversationId(conversationId);
-      setMessages(loadedPage.messages.map((message) => ({
-        id: message.id,
-        role: message.role,
-        content: message.content,
-        status: message.status,
-      })));
-      setNextMessageCursor(loadedPage.nextCursor);
-      setError(null);
-    } catch (requestError) {
-      if (active) handleLoadError(requestError);
+  function isCurrentRoute(path: string, loadVersion: number): boolean {
+    return routeLoadVersion.current === loadVersion && routeRef.current.path === path;
+  }
+
+  function applyRoute(nextRoute: Route, historyMode: "push" | "replace" | "history", preserveView = false) {
+    if (nextRoute.path === routeRef.current.path) return;
+
+    if (isStreamingRef.current && !preserveView) {
+      abortController.current?.abort();
     }
+    if (historyMode === "push") {
+      window.history.pushState({}, "", nextRoute.path);
+    } else if (historyMode === "replace") {
+      window.history.replaceState({}, "", nextRoute.path);
+    }
+
+    routeRef.current = nextRoute;
+    if (!preserveView) {
+      adoptedConversationId.current = null;
+    }
+    setRoute(nextRoute);
+  }
+
+  function selectConversation(conversationId: string) {
+    if (isStreaming) return;
+    applyRoute(conversationRoute(conversationId), "push");
   }
 
   function startNewChat() {
     if (isStreaming) return;
-    selectedConversationIdRef.current = null;
-    setSelectedConversationId(null);
-    setMessages([]);
-    setNextMessageCursor(undefined);
-    setError(null);
+    applyRoute({ kind: "new", path: "/" }, "push");
   }
 
   async function loadMoreConversations() {
@@ -102,7 +202,10 @@ export function ChatPage({ accessToken, onAuthenticationFailure, onSignOut }: Ch
     setIsLoadingMoreConversations(true);
     try {
       const loadedPage = await listConversations(accessToken, nextConversationCursor);
-      setConversations((currentConversations) => mergeById(currentConversations, loadedPage.conversations));
+      setConversations((currentConversations) => mergeById(
+        currentConversations,
+        loadedPage.conversations,
+      ));
       setNextConversationCursor(loadedPage.nextCursor);
       setError(null);
     } catch (requestError) {
@@ -137,7 +240,7 @@ export function ChatPage({ accessToken, onAuthenticationFailure, onSignOut }: Ch
     event.preventDefault();
     const message = input.trim();
 
-    if (!message || isStreaming) {
+    if (!message || isStreaming || isNotFound) {
       return;
     }
 
@@ -149,10 +252,17 @@ export function ChatPage({ accessToken, onAuthenticationFailure, onSignOut }: Ch
     const assistantMessageId = nextMessageId.current++;
     const conversationId = selectedConversationId;
     const activityAt = new Date().toISOString();
+    const controller = new AbortController();
+    const session: StreamSession = {
+      controller,
+      initialPath: routeRef.current.path,
+    };
 
     setInput("");
     setError(null);
     setIsStreaming(true);
+    streamSession.current = session;
+    abortController.current = controller;
     setMessages((currentMessages) => [
       ...currentMessages,
       userMessage,
@@ -171,9 +281,6 @@ export function ChatPage({ accessToken, onAuthenticationFailure, onSignOut }: Ch
       });
     }
 
-    const controller = new AbortController();
-    abortController.current = controller;
-
     try {
       await streamConversationResponse({
         conversationId,
@@ -181,21 +288,24 @@ export function ChatPage({ accessToken, onAuthenticationFailure, onSignOut }: Ch
         clientMessageId: crypto.randomUUID(),
         accessToken,
         onTurnStarted: (turn) => {
-          if (!conversationId) {
-            selectedConversationIdRef.current = turn.conversationId;
-            setSelectedConversationId(turn.conversationId);
-            setConversations((currentConversations) => [
-              {
-                id: turn.conversationId,
-                title: message.slice(0, 80),
-                createdAt: activityAt,
-                activityAt,
-              },
-              ...currentConversations,
-            ]);
-          }
+          if (!canUpdateStream(session) || conversationId) return;
+          session.adoptedConversationId = turn.conversationId;
+          adoptedConversationId.current = turn.conversationId;
+          selectedConversationIdRef.current = turn.conversationId;
+          setSelectedConversationId(turn.conversationId);
+          setConversations((currentConversations) => mergeById(
+            [{
+              id: turn.conversationId,
+              title: message.slice(0, 80),
+              createdAt: activityAt,
+              activityAt,
+            }],
+            currentConversations,
+          ));
+          applyRoute(conversationRoute(turn.conversationId), "replace", true);
         },
         onDelta: (delta) => {
+          if (!canUpdateStream(session)) return;
           setMessages((currentMessages) =>
             currentMessages.map((currentMessage) =>
               currentMessage.id === assistantMessageId
@@ -205,11 +315,14 @@ export function ChatPage({ accessToken, onAuthenticationFailure, onSignOut }: Ch
           );
         },
         onTerminal: (status) => {
-          setAssistantMessageStatus(assistantMessageId, status);
+          if (canUpdateStream(session)) {
+            setAssistantMessageStatus(assistantMessageId, status);
+          }
         },
         signal: controller.signal,
       });
     } catch (requestError) {
+      if (!canUpdateStream(session)) return;
       if (controller.signal.aborted) {
         setAssistantMessageStatus(assistantMessageId, "aborted");
       } else {
@@ -220,11 +333,21 @@ export function ChatPage({ accessToken, onAuthenticationFailure, onSignOut }: Ch
         setAssistantMessageStatus(assistantMessageId, "error");
       }
     } finally {
-      if (abortController.current === controller) {
+      if (streamSession.current === session) {
+        if (controller.signal.aborted && canUpdateStream(session)) {
+          setAssistantMessageStatus(assistantMessageId, "aborted");
+        }
+        streamSession.current = null;
         abortController.current = null;
+        setIsStreaming(false);
       }
-      setIsStreaming(false);
     }
+  }
+
+  function canUpdateStream(session: StreamSession): boolean {
+    if (streamSession.current !== session) return false;
+    if (routeRef.current.path === session.initialPath) return true;
+    return session.adoptedConversationId === routeRef.current.path.slice("/conversations/".length);
   }
 
   function handleStop() {
@@ -263,7 +386,7 @@ export function ChatPage({ accessToken, onAuthenticationFailure, onSignOut }: Ch
                       className={conversation.id === selectedConversationId ? "conversation-selected" : ""}
                       aria-current={conversation.id === selectedConversationId ? "page" : undefined}
                       disabled={isStreaming}
-                      onClick={() => void selectConversation(conversation.id)}
+                      onClick={() => selectConversation(conversation.id)}
                     >
                       {conversation.title || "Untitled conversation"}
                     </button>
@@ -279,71 +402,104 @@ export function ChatPage({ accessToken, onAuthenticationFailure, onSignOut }: Ch
           )}
         </aside>
         <section className="chat-content">
-        <header className="chat-header">
-          <div>
-            <p className="eyebrow">Chat RAG</p>
-            <h1>AI Chat</h1>
-          </div>
-          <span className={isStreaming ? "status status-streaming" : "status"}>
-            {isStreaming ? "Streaming" : "Ready"}
-          </span>
-          <button type="button" onClick={onSignOut}>Sign out</button>
-        </header>
-
-        <div className="messages" aria-live="polite">
-          {nextMessageCursor && (
-            <button type="button" disabled={isStreaming || isLoadingOlderMessages} onClick={() => void loadOlderMessages()}>
-              {isLoadingOlderMessages ? "Loading older messages…" : "Load older messages"}
-            </button>
-          )}
-          {messages.length === 0 ? (
-            <div className="empty-state">
-              <span className="empty-icon">✦</span>
-              <h2>Start a conversation</h2>
-              <p>Ask anything and watch the answer arrive in real time.</p>
+          <header className="chat-header">
+            <div>
+              <p className="eyebrow">Chat RAG</p>
+              <h1>AI Chat</h1>
             </div>
-          ) : (
-            messages.map((message) => (
-              <article className={`message message-${message.role}`} key={message.id}>
-                <span className="message-role">{message.role === "user" ? "You" : "AI"}</span>
-                <p>{message.content || (isStreaming && message.role === "assistant" ? "…" : "")}</p>
-                {message.status && message.status !== "complete" && (
-                  <span className="message-status">{message.status}</span>
-                )}
-              </article>
-            ))
-          )}
-        </div>
+            <span className={isStreaming ? "status status-streaming" : "status"}>
+              {isStreaming ? "Streaming" : "Ready"}
+            </span>
+            <button type="button" onClick={onSignOut}>Sign out</button>
+          </header>
 
-        {error && <p className="error-message" role="alert">{error}</p>}
+          <div className="messages" aria-live="polite">
+            {isNotFound ? (
+              <div className="empty-state">
+                <h2>Conversation not found</h2>
+                <p>This Conversation is unavailable.</p>
+              </div>
+            ) : isLoadingConversation ? (
+              <p role="status">Loading conversation…</p>
+            ) : nextMessageCursor ? (
+              <button type="button" disabled={isStreaming || isLoadingOlderMessages} onClick={() => void loadOlderMessages()}>
+                {isLoadingOlderMessages ? "Loading older messages…" : "Load older messages"}
+              </button>
+            ) : null}
+            {!isNotFound && !isLoadingConversation && messages.length === 0 ? (
+              <div className="empty-state">
+                <span className="empty-icon">✦</span>
+                <h2>Start a conversation</h2>
+                <p>Ask anything and watch the answer arrive in real time.</p>
+              </div>
+            ) : !isNotFound && !isLoadingConversation ? (
+              messages.map((message) => (
+                <article className={`message message-${message.role}`} key={message.id}>
+                  <span className="message-role">{message.role === "user" ? "You" : "AI"}</span>
+                  <p>{message.content || (isStreaming && message.role === "assistant" ? "…" : "")}</p>
+                  {message.status && message.status !== "complete" && (
+                    <span className="message-status">{message.status}</span>
+                  )}
+                </article>
+              ))
+            ) : null}
+          </div>
 
-        <form className="composer" onSubmit={handleSubmit}>
-          <label className="sr-only" htmlFor="message">Message</label>
-          <textarea
-            id="message"
-            value={input}
-            onChange={(event) => setInput(event.target.value)}
-            onKeyDown={(event) => {
-              if (event.key === "Enter" && !event.shiftKey) {
-                event.preventDefault();
-                event.currentTarget.form?.requestSubmit();
-              }
-            }}
-            placeholder="Ask something..."
-            rows={1}
-            disabled={isStreaming}
-          />
-          {isStreaming ? (
-            <button className="stop-button" type="button" onClick={handleStop}>Stop</button>
-          ) : (
-            <button type="submit" disabled={!input.trim()}>Send</button>
-          )}
-        </form>
-        <p className="composer-hint">Press Enter to send · Shift + Enter for a new line</p>
+          {error && <p className="error-message" role="alert">{error}</p>}
+
+          <form className="composer" onSubmit={handleSubmit}>
+            <label className="sr-only" htmlFor="message">Message</label>
+            <textarea
+              id="message"
+              value={input}
+              onChange={(event) => setInput(event.target.value)}
+              onKeyDown={(event) => {
+                if (event.key === "Enter" && !event.shiftKey) {
+                  event.preventDefault();
+                  event.currentTarget.form?.requestSubmit();
+                }
+              }}
+              placeholder="Ask something..."
+              rows={1}
+              disabled={isStreaming || isNotFound}
+            />
+            {isStreaming ? (
+              <button className="stop-button" type="button" onClick={handleStop}>Stop</button>
+            ) : (
+              <button type="submit" disabled={!input.trim() || isNotFound}>Send</button>
+            )}
+          </form>
+          <p className="composer-hint">Press Enter to send · Shift + Enter for a new line</p>
         </section>
       </section>
     </main>
   );
+}
+
+function readRoute(): Route {
+  const path = window.location.pathname;
+  if (path === "/") return { kind: "new", path: "/" };
+
+  const match = /^\/conversations\/([^/]+)$/.exec(path);
+  if (!match) return { kind: "not-found", path };
+
+  let conversationId: string;
+  try {
+    conversationId = decodeURIComponent(match[1]!);
+  } catch {
+    return { kind: "not-found", path };
+  }
+  return /^\d+$/.test(conversationId)
+    ? conversationRoute(conversationId)
+    : { kind: "not-found", path };
+}
+
+function conversationRoute(conversationId: string): Route {
+  return {
+    kind: "conversation",
+    id: conversationId,
+    path: `/conversations/${encodeURIComponent(conversationId)}`,
+  };
 }
 
 function toChatMessage(message: ConversationMessage): ChatMessage {

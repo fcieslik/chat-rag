@@ -1,10 +1,16 @@
 import { useAuth } from "react-oidc-context";
 import type { ReactNode } from "react";
 import { ChatPage } from "../features/chat/ChatPage";
-import { buildCognitoLogoutUrl, cognitoLogoutConfig } from "../auth/authConfig";
+import { buildCognitoLogoutUrl, cognitoLogoutConfig, safeConversationPath } from "../auth/authConfig";
 
 export function App() {
   const auth = useAuth();
+
+  function signIn() {
+    void auth.signinRedirect({
+      state: { returnPath: safeConversationPath(window.location.pathname) ?? "/" },
+    });
+  }
 
   if (auth.isLoading) {
     return <AuthStatus message="Checking your session…" />;
@@ -14,7 +20,7 @@ export function App() {
     return (
       <AuthStatus
         message={`Authentication failed: ${auth.error.message}`}
-        action={<button onClick={() => void auth.signinRedirect()}>Try again</button>}
+        action={<button onClick={signIn}>Try again</button>}
       />
     );
   }
@@ -23,7 +29,7 @@ export function App() {
     return (
       <AuthStatus
         message="Sign in to use the chat."
-        action={<button onClick={() => void auth.signinRedirect()}>Sign in</button>}
+        action={<button onClick={signIn}>Sign in</button>}
       />
     );
   }
