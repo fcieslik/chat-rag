@@ -324,7 +324,8 @@ cat > "$GITHUB_POLICY_FILE" <<'JSON'
       "Sid": "RegisterApiTaskDefinition",
       "Effect": "Allow",
       "Action": [
-        "ecs:RegisterTaskDefinition"
+        "ecs:RegisterTaskDefinition",
+        "ecs:DescribeTaskDefinition"
       ],
       "Resource": "*"
     },
