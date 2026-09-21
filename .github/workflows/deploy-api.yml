@@ -124,8 +124,58 @@ jobs:
 
           echo "deploy=$deploy" >> "$GITHUB_OUTPUT"
 
+  integration:
+    runs-on: ubuntu-latest
+
+    services:
+      postgres:
+        image: postgres:18.3-alpine
+        env:
+          POSTGRES_USER: chat_rag_admin
+          POSTGRES_PASSWORD: local-admin-password
+          POSTGRES_DB: postgres
+        options: >-
+          --health-cmd "pg_isready -U chat_rag_admin -d postgres"
+          --health-interval 5s
+          --health-timeout 3s
+          --health-retries 10
+        ports:
+          - 5432:5432
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 11.25.0
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Create PostgreSQL integration roles
+        env:
+          PGPASSWORD: local-admin-password
+        run: |
+          psql --host localhost --username chat_rag_admin --dbname postgres --command "create role chat_rag_migrate login password 'local-migration-password'"
+          psql --host localhost --username chat_rag_admin --dbname postgres --command "create role chat_rag_app login password 'local-app-password'"
+          psql --host localhost --username chat_rag_admin --dbname postgres --command "create database chat_rag_test owner chat_rag_migrate"
+
+      - name: Run PostgreSQL integration tests
+        env:
+          POSTGRES_INTEGRATION_DATABASE_URL: postgresql://chat_rag_migrate:local-migration-password@localhost:5432/chat_rag_test?sslmode=disable
+          POSTGRES_INTEGRATION_APPLICATION_DATABASE_URL: postgresql://chat_rag_app:local-app-password@localhost:5432/chat_rag_test?sslmode=disable
+        run: pnpm --filter @chat-rag/api test:integration
+
   deploy:
-    needs: [validate, guardrail-evaluation]
+    needs: [validate, integration, guardrail-evaluation]
     if: github.ref == 'refs/heads/main' && needs.validate.outputs.apiDeploymentChanges == 'true'
     runs-on: ubuntu-latest
 
@@ -166,6 +216,25 @@ jobs:
           task-definition: infra/ecs/task-definition.json
           container-name: chat-rag-api
           image: ${{ env.ECR_REGISTRY }}/${{ env.ECR_REPOSITORY }}:${{ github.sha }}
+
+      - name: Render migration ECS task definition
+        id: render-migration-task-definition
+        uses: aws-actions/amazon-ecs-render-task-definition@v1
+        with:
+          task-definition: infra/ecs/migration-task-definition.json
+          container-name: chat-rag-api-migration
+          image: ${{ env.ECR_REGISTRY }}/${{ env.ECR_REPOSITORY }}:${{ github.sha }}
+
+      - name: Run database migrations in ECS
+        env:
+          RENDERED_MIGRATION_TASK_DEFINITION: ${{ steps.render-migration-task-definition.outputs.task-definition }}
+        run: |
+          set -euo pipefail
+          migration_task_definition_arn="$(aws ecs register-task-definition \
+            --cli-input-json "file://$RENDERED_MIGRATION_TASK_DEFINITION" \
+            --query 'taskDefinition.taskDefinitionArn' \
+            --output text)"
+          node apps/api/scripts/run-ecs-migration.mjs "$migration_task_definition_arn"
 
       - name: Deploy to Amazon ECS
         id: deploy
