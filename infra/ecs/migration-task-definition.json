@@ -12,7 +12,7 @@
         { "name": "NODE_ENV", "value": "production" }
       ],
       "secrets": [
-        { "name": "DATABASE_URL", "valueFrom": "chat-rag/db/migrate" }
+        { "name": "DATABASE_URL", "valueFrom": "arn:aws:secretsmanager:eu-central-1:385740679214:secret:chat-rag/db/migrate-gLnEEd" }
       ],
       "logConfiguration": {
         "logDriver": "awslogs",

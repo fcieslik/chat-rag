@@ -1,4 +1,4 @@
-import { chmod, mkdtemp, rm, writeFile } from "node:fs/promises";
+import { chmod, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { spawn } from "node:child_process";
 import { once } from "node:events";
 import { tmpdir } from "node:os";
@@ -83,5 +83,22 @@ describe("ECS migration command", () => {
 
   it("fails when ECS cannot launch the migration task", async () => {
     await expect(runMigrationTask("launch-failure")).resolves.toMatchObject({ code: 1 });
+  });
+});
+
+describe("ECS database secret references", () => {
+  it.each([
+    ["task-definition.json", "app"],
+    ["migration-task-definition.json", "migrate"],
+  ])("uses the Secrets Manager ARN for %s", async (fileName, role) => {
+    const path = join(process.cwd(), "..", "..", "infra", "ecs", fileName);
+    const definition = JSON.parse(await readFile(path, "utf8"));
+    const databaseSecret = definition.containerDefinitions[0].secrets.find(
+      (secret: { name: string }) => secret.name === "DATABASE_URL",
+    );
+
+    expect(databaseSecret?.valueFrom).toMatch(
+      new RegExp(`^arn:aws:secretsmanager:eu-central-1:385740679214:secret:chat-rag/db/${role}-[A-Za-z0-9]{6}$`),
+    );
   });
 });

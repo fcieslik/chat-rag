@@ -35,7 +35,7 @@
       "secrets": [
         {
           "name": "DATABASE_URL",
-          "valueFrom": "chat-rag/db/app"
+          "valueFrom": "arn:aws:secretsmanager:eu-central-1:385740679214:secret:chat-rag/db/app-wFub3C"
         },
         {
           "name": "OPENAI_API_KEY",
