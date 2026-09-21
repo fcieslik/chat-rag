@@ -104,10 +104,12 @@ describePostgres("GET owned Conversations", () => {
       ...firstConversations.body.conversations,
       ...secondConversations.body.conversations,
     ].map((storedConversation) => storedConversation.id))).toHaveLength(22);
-    await expect(own("/v1/conversations?limit=100")).resolves.toMatchObject({
-      status: 200,
-      body: { conversations: expect.arrayContaining([{ title: "History" }]) },
-    });
+    const maximumConversationPage = await own("/v1/conversations?limit=100");
+    expect(maximumConversationPage.status).toBe(200);
+    expect(maximumConversationPage.body.conversations).toHaveLength(22);
+    expect(maximumConversationPage.body.conversations).toEqual(
+      expect.arrayContaining([expect.objectContaining({ title: "History" })]),
+    );
 
     const messagesPath = `/v1/conversations/${conversation.rows[0]!.id}/messages`;
     const newestMessages = await own(messagesPath);
@@ -118,10 +120,12 @@ describePostgres("GET owned Conversations", () => {
     const olderMessages = await own(`${messagesPath}?cursor=${encodeURIComponent(newestMessages.body.nextCursor)}`);
     expect(olderMessages.body.messages.map((message) => message.content)).toEqual(["Message 1"]);
     expect(olderMessages.body.nextCursor).toBeUndefined();
-    await expect(own(`${messagesPath}?limit=100`)).resolves.toMatchObject({
-      status: 200,
-      body: { messages: expect.arrayContaining([{ content: "Message 1" }]) },
-    });
+    const maximumMessagePage = await own(`${messagesPath}?limit=100`);
+    expect(maximumMessagePage.status).toBe(200);
+    expect(maximumMessagePage.body.messages).toHaveLength(51);
+    expect(maximumMessagePage.body.messages).toEqual(
+      expect.arrayContaining([expect.objectContaining({ content: "Message 1" })]),
+    );
 
     for (const path of ["/v1/conversations?limit=101", "/v1/conversations?limit=0", `${messagesPath}?limit=not-a-number`]) {
       await expect(own(path)).resolves.toMatchObject({

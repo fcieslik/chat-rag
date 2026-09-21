@@ -35,3 +35,21 @@ _Avoid_: manual ECS update
 **Deployment circuit breaker**:
 The ECS failure mechanism that marks an unhealthy rolling deployment as failed and can restore the last completed deployment.
 _Avoid_: pipeline rollback (the rollback is performed by ECS)
+
+## Conversation language
+
+**User**:
+A person authenticated by Cognito whose conversations are isolated from every other user.
+_Avoid_: account, database user
+
+**Conversation**:
+A user-owned chat thread containing an ordered history of messages.
+_Avoid_: session, chat session
+
+**Message**:
+A single user, assistant, or system contribution belonging to one conversation.
+_Avoid_: prompt (unless referring specifically to model input)
+
+**Turn**:
+A user message together with the assistant response created for it.
+_Avoid_: request, exchange
