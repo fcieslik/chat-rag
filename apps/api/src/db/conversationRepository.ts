@@ -7,10 +7,21 @@ export interface CreatedFirstTurn {
   assistantMessageId: bigint;
 }
 
+export type IdempotentTurnResult =
+  | { kind: "missing" }
+  | { kind: "foreign" }
+  | { kind: "incomplete" }
+  | { kind: "complete"; turn: CreatedFirstTurn; content: string };
+
+export type CreateFirstTurnResult =
+  | { kind: "created"; turn: CreatedFirstTurn }
+  | Exclude<IdempotentTurnResult, { kind: "missing" }>;
+
 export type AppendTurnResult =
   | { kind: "not_found" }
   | { kind: "pending" }
-  | { kind: "created"; turn: CreatedFirstTurn; context: ModelMessage[] };
+  | { kind: "created"; turn: CreatedFirstTurn; context: ModelMessage[] }
+  | Exclude<IdempotentTurnResult, { kind: "missing" }>;
 
 export interface StoredConversation {
   id: bigint;
@@ -29,13 +40,37 @@ export interface StoredMessage {
   createdAt: Date;
 }
 
+export interface HistoryCursor {
+  timestamp: Date;
+  id: bigint;
+}
+
+export interface PageRequest {
+  limit: number;
+  cursor?: HistoryCursor;
+}
+
+export interface ConversationPage {
+  conversations: StoredConversation[];
+  nextCursor?: HistoryCursor;
+}
+
+export interface MessagePage {
+  messages: StoredMessage[];
+  nextCursor?: HistoryCursor;
+}
+
 export interface ConversationRepository {
+  findTurnByClientMessageId(
+    cognitoSubject: string,
+    clientMessageId: string,
+  ): Promise<IdempotentTurnResult>;
   createFirstTurn(input: {
     cognitoSubject: string;
     message: string;
     clientMessageId: string;
     assistantMetadata: Record<string, string>;
-  }): Promise<CreatedFirstTurn>;
+  }): Promise<CreateFirstTurnResult>;
   appendTurn(input: {
     cognitoSubject: string;
     conversationId: bigint;
@@ -48,9 +83,13 @@ export interface ConversationRepository {
     status: "complete" | "error" | "aborted",
     content: string,
   ): Promise<void>;
-  listOwnedConversations(cognitoSubject: string): Promise<StoredConversation[]>;
+  listOwnedConversations(cognitoSubject: string, page: PageRequest): Promise<ConversationPage>;
   getOwnedConversation(cognitoSubject: string, conversationId: bigint): Promise<StoredConversation | undefined>;
-  listOwnedMessages(cognitoSubject: string, conversationId: bigint): Promise<StoredMessage[] | undefined>;
+  listOwnedMessages(
+    cognitoSubject: string,
+    conversationId: bigint,
+    page: PageRequest,
+  ): Promise<MessagePage | undefined>;
   close(): Promise<void>;
 }
 
@@ -65,11 +104,20 @@ export function createConversationRepository(
   });
 
   return {
+    async findTurnByClientMessageId(cognitoSubject, clientMessageId) {
+      return lookupTurn(pool, cognitoSubject, clientMessageId);
+    },
+
     async createFirstTurn(input) {
       const client = await pool.connect();
 
       try {
         await client.query("begin");
+        const existingTurn = await lookupTurn(client, input.cognitoSubject, input.clientMessageId);
+        if (existingTurn.kind !== "missing") {
+          await client.query("commit");
+          return existingTurn;
+        }
         const userId = await resolveUserId(client, input.cognitoSubject);
         const conversation = await client.query<{ id: bigint }>(
           "insert into conversations (user_id, title) values ($1, $2) returning id",
@@ -91,12 +139,21 @@ export function createConversationRepository(
         await client.query("commit");
 
         return {
-          conversationId,
-          userMessageId,
-          assistantMessageId: assistantMessage.rows[0]!.id,
+          kind: "created",
+          turn: {
+            conversationId,
+            userMessageId,
+            assistantMessageId: assistantMessage.rows[0]!.id,
+          },
         };
       } catch (error) {
         await client.query("rollback");
+        if (isUniqueViolation(error)) {
+          const existingTurn = await lookupTurn(pool, input.cognitoSubject, input.clientMessageId);
+          if (existingTurn.kind !== "missing") {
+            return existingTurn;
+          }
+        }
         throw error;
       } finally {
         client.release();
@@ -115,6 +172,11 @@ export function createConversationRepository(
 
       try {
         await client.query("begin");
+        const existingTurn = await lookupTurn(client, input.cognitoSubject, input.clientMessageId);
+        if (existingTurn.kind !== "missing") {
+          await client.query("commit");
+          return existingTurn;
+        }
         const conversation = await client.query<{ id: bigint }>(
           "select c.id from conversations c join users u on u.id = c.user_id where u.cognito_subject = $1 and c.id = $2 and c.deleted_at is null for update",
           [input.cognitoSubject, input.conversationId],
@@ -122,6 +184,16 @@ export function createConversationRepository(
         if (!conversation.rows[0]) {
           await client.query("commit");
           return { kind: "not_found" };
+        }
+
+        const lockedExistingTurn = await lookupTurn(
+          client,
+          input.cognitoSubject,
+          input.clientMessageId,
+        );
+        if (lockedExistingTurn.kind !== "missing") {
+          await client.query("commit");
+          return lockedExistingTurn;
         }
 
         await client.query(
@@ -165,18 +237,39 @@ export function createConversationRepository(
         };
       } catch (error) {
         await client.query("rollback");
+        if (isUniqueViolation(error)) {
+          const existingTurn = await lookupTurn(pool, input.cognitoSubject, input.clientMessageId);
+          if (existingTurn.kind !== "missing") {
+            return existingTurn;
+          }
+        }
         throw error;
       } finally {
         client.release();
       }
     },
 
-    async listOwnedConversations(cognitoSubject) {
+    async listOwnedConversations(cognitoSubject, page) {
+      const cursorFilter = page.cursor
+        ? "and (c.activity_at, c.id) < ($2, $3)"
+        : "";
       const result = await pool.query<StoredConversation>(
-        "select c.id, c.title, c.created_at as \"createdAt\", c.activity_at as \"activityAt\" from conversations c join users u on u.id = c.user_id where u.cognito_subject = $1 and c.deleted_at is null order by c.activity_at desc, c.id desc limit 20",
-        [cognitoSubject],
+        `select c.id, c.title, c.created_at as "createdAt", c.activity_at as "activityAt"
+         from conversations c join users u on u.id = c.user_id
+         where u.cognito_subject = $1 and c.deleted_at is null ${cursorFilter}
+         order by c.activity_at desc, c.id desc limit $${page.cursor ? 4 : 2}`,
+        page.cursor
+          ? [cognitoSubject, page.cursor.timestamp, page.cursor.id, page.limit + 1]
+          : [cognitoSubject, page.limit + 1],
       );
-      return result.rows;
+      const conversations = result.rows.slice(0, page.limit);
+      const lastConversation = conversations.at(-1);
+      return {
+        conversations,
+        ...(result.rows.length > page.limit && lastConversation
+          ? { nextCursor: { timestamp: lastConversation.activityAt, id: lastConversation.id } }
+          : {}),
+      };
     },
 
     async getOwnedConversation(cognitoSubject, conversationId) {
@@ -187,21 +280,87 @@ export function createConversationRepository(
       return result.rows[0];
     },
 
-    async listOwnedMessages(cognitoSubject, conversationId) {
-      const result = await pool.query<StoredMessage & { conversation_id: bigint }>(
-        "select m.id, m.role, m.status, m.content, m.metadata, m.reply_to_message_id as \"replyToMessageId\", m.created_at as \"createdAt\" from conversations c join users u on u.id = c.user_id left join messages m on m.conversation_id = c.id where u.cognito_subject = $1 and c.id = $2 and c.deleted_at is null order by m.created_at asc nulls first, m.id asc nulls first",
+    async listOwnedMessages(cognitoSubject, conversationId, page) {
+      const conversation = await pool.query<{ id: bigint }>(
+        "select c.id from conversations c join users u on u.id = c.user_id where u.cognito_subject = $1 and c.id = $2 and c.deleted_at is null",
         [cognitoSubject, conversationId],
       );
-      if (result.rowCount === 0) {
+      if (!conversation.rows[0]) {
         return undefined;
       }
-      return result.rows.filter((message) => message.id !== null);
+      const cursorFilter = page.cursor
+        ? "and (m.created_at, m.id) < ($2, $3)"
+        : "";
+      const result = await pool.query<StoredMessage>(
+        `select m.id, m.role, m.status, m.content, m.metadata,
+                m.reply_to_message_id as "replyToMessageId", m.created_at as "createdAt"
+         from messages m
+         where m.conversation_id = $1 ${cursorFilter}
+         order by m.created_at desc, m.id desc limit $${page.cursor ? 4 : 2}`,
+        page.cursor
+          ? [conversationId, page.cursor.timestamp, page.cursor.id, page.limit + 1]
+          : [conversationId, page.limit + 1],
+      );
+      const newestFirstMessages = result.rows.slice(0, page.limit);
+      const oldestMessage = newestFirstMessages.at(-1);
+      return {
+        messages: newestFirstMessages.reverse(),
+        ...(result.rows.length > page.limit && oldestMessage
+          ? { nextCursor: { timestamp: oldestMessage.createdAt, id: oldestMessage.id } }
+          : {}),
+      };
     },
 
     async close() {
       await pool.end();
     },
   };
+}
+
+async function lookupTurn(
+  queryable: Pick<Pool, "query"> | PoolClient,
+  cognitoSubject: string,
+  clientMessageId: string,
+): Promise<IdempotentTurnResult> {
+  const result = await queryable.query<{
+    conversationId: bigint;
+    ownerSubject: string;
+    userMessageId: bigint;
+    assistantMessageId: bigint;
+    assistantStatus: "pending" | "complete" | "error" | "aborted";
+    assistantContent: string;
+  }>(
+    `select c.id as "conversationId", u.cognito_subject as "ownerSubject", user_message.id as "userMessageId", assistant_message.id as "assistantMessageId", assistant_message.status as "assistantStatus", assistant_message.content as "assistantContent"
+     from messages user_message
+     join conversations c on c.id = user_message.conversation_id
+     join users u on u.id = c.user_id
+     join messages assistant_message on assistant_message.reply_to_message_id = user_message.id and assistant_message.role = 'assistant'
+     where user_message.client_message_id = $1`,
+    [clientMessageId],
+  );
+  const storedTurn = result.rows[0];
+  if (!storedTurn) {
+    return { kind: "missing" };
+  }
+  if (storedTurn.ownerSubject !== cognitoSubject) {
+    return { kind: "foreign" };
+  }
+  if (storedTurn.assistantStatus !== "complete") {
+    return { kind: "incomplete" };
+  }
+  return {
+    kind: "complete",
+    turn: {
+      conversationId: storedTurn.conversationId,
+      userMessageId: storedTurn.userMessageId,
+      assistantMessageId: storedTurn.assistantMessageId,
+    },
+    content: storedTurn.assistantContent,
+  };
+}
+
+function isUniqueViolation(error: unknown): boolean {
+  return typeof error === "object" && error !== null && "code" in error && error.code === "23505";
 }
 
 async function resolveUserId(client: PoolClient, cognitoSubject: string): Promise<bigint> {

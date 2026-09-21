@@ -27,12 +27,17 @@ interface ChatPageProps {
 export function ChatPage({ accessToken, onAuthenticationFailure, onSignOut }: ChatPageProps) {
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [conversations, setConversations] = useState<Conversation[]>([]);
+  const [nextConversationCursor, setNextConversationCursor] = useState<string>();
   const [selectedConversationId, setSelectedConversationId] = useState<string | null>(null);
+  const [nextMessageCursor, setNextMessageCursor] = useState<string>();
   const [isLoadingConversations, setIsLoadingConversations] = useState(true);
+  const [isLoadingMoreConversations, setIsLoadingMoreConversations] = useState(false);
+  const [isLoadingOlderMessages, setIsLoadingOlderMessages] = useState(false);
   const [input, setInput] = useState("");
   const [isStreaming, setIsStreaming] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const abortController = useRef<AbortController | null>(null);
+  const selectedConversationIdRef = useRef<string | null>(null);
   const nextMessageId = useRef(0);
 
   useEffect(() => {
@@ -40,10 +45,11 @@ export function ChatPage({ accessToken, onAuthenticationFailure, onSignOut }: Ch
 
     async function loadNewestConversation() {
       try {
-        const loadedConversations = await listConversations(accessToken);
+        const loadedPage = await listConversations(accessToken);
         if (!active) return;
-        setConversations(loadedConversations);
-        const newestConversation = loadedConversations[0];
+        setConversations(loadedPage.conversations);
+        setNextConversationCursor(loadedPage.nextCursor);
+        const newestConversation = loadedPage.conversations[0];
         if (newestConversation) {
           await selectConversation(newestConversation.id, active);
         }
@@ -64,16 +70,18 @@ export function ChatPage({ accessToken, onAuthenticationFailure, onSignOut }: Ch
   }
 
   async function selectConversation(conversationId: string, active = true) {
+    selectedConversationIdRef.current = conversationId;
     try {
-      const loadedMessages = await listConversationMessages(conversationId, accessToken);
-      if (!active) return;
+      const loadedPage = await listConversationMessages(conversationId, accessToken);
+      if (!active || selectedConversationIdRef.current !== conversationId) return;
       setSelectedConversationId(conversationId);
-      setMessages(loadedMessages.map((message) => ({
+      setMessages(loadedPage.messages.map((message) => ({
         id: message.id,
         role: message.role,
         content: message.content,
         status: message.status,
       })));
+      setNextMessageCursor(loadedPage.nextCursor);
       setError(null);
     } catch (requestError) {
       if (active) handleLoadError(requestError);
@@ -82,9 +90,47 @@ export function ChatPage({ accessToken, onAuthenticationFailure, onSignOut }: Ch
 
   function startNewChat() {
     if (isStreaming) return;
+    selectedConversationIdRef.current = null;
     setSelectedConversationId(null);
     setMessages([]);
+    setNextMessageCursor(undefined);
     setError(null);
+  }
+
+  async function loadMoreConversations() {
+    if (!nextConversationCursor || isStreaming || isLoadingMoreConversations) return;
+    setIsLoadingMoreConversations(true);
+    try {
+      const loadedPage = await listConversations(accessToken, nextConversationCursor);
+      setConversations((currentConversations) => mergeById(currentConversations, loadedPage.conversations));
+      setNextConversationCursor(loadedPage.nextCursor);
+      setError(null);
+    } catch (requestError) {
+      handleLoadError(requestError);
+    } finally {
+      setIsLoadingMoreConversations(false);
+    }
+  }
+
+  async function loadOlderMessages() {
+    const cursor = nextMessageCursor;
+    const conversationId = selectedConversationId;
+    if (!cursor || !conversationId || isStreaming || isLoadingOlderMessages) return;
+    setIsLoadingOlderMessages(true);
+    try {
+      const loadedPage = await listConversationMessages(conversationId, accessToken, cursor);
+      if (selectedConversationIdRef.current !== conversationId) return;
+      setMessages((currentMessages) => mergeById(
+        loadedPage.messages.map(toChatMessage),
+        currentMessages,
+      ));
+      setNextMessageCursor(loadedPage.nextCursor);
+      setError(null);
+    } catch (requestError) {
+      handleLoadError(requestError);
+    } finally {
+      setIsLoadingOlderMessages(false);
+    }
   }
 
   async function handleSubmit(event: FormEvent<HTMLFormElement>) {
@@ -136,6 +182,7 @@ export function ChatPage({ accessToken, onAuthenticationFailure, onSignOut }: Ch
         accessToken,
         onTurnStarted: (turn) => {
           if (!conversationId) {
+            selectedConversationIdRef.current = turn.conversationId;
             setSelectedConversationId(turn.conversationId);
             setConversations((currentConversations) => [
               {
@@ -207,21 +254,28 @@ export function ChatPage({ accessToken, onAuthenticationFailure, onSignOut }: Ch
           ) : conversations.length === 0 ? (
             <p>No saved conversations.</p>
           ) : (
-            <ul>
-              {conversations.map((conversation) => (
-                <li key={conversation.id}>
-                  <button
-                    type="button"
-                    className={conversation.id === selectedConversationId ? "conversation-selected" : ""}
-                    aria-current={conversation.id === selectedConversationId ? "page" : undefined}
-                    disabled={isStreaming}
-                    onClick={() => void selectConversation(conversation.id)}
-                  >
-                    {conversation.title || "Untitled conversation"}
-                  </button>
-                </li>
-              ))}
-            </ul>
+            <>
+              <ul>
+                {conversations.map((conversation) => (
+                  <li key={conversation.id}>
+                    <button
+                      type="button"
+                      className={conversation.id === selectedConversationId ? "conversation-selected" : ""}
+                      aria-current={conversation.id === selectedConversationId ? "page" : undefined}
+                      disabled={isStreaming}
+                      onClick={() => void selectConversation(conversation.id)}
+                    >
+                      {conversation.title || "Untitled conversation"}
+                    </button>
+                  </li>
+                ))}
+              </ul>
+              {nextConversationCursor && (
+                <button type="button" disabled={isStreaming || isLoadingMoreConversations} onClick={() => void loadMoreConversations()}>
+                  {isLoadingMoreConversations ? "Loading conversations…" : "Load more conversations"}
+                </button>
+              )}
+            </>
           )}
         </aside>
         <section className="chat-content">
@@ -237,6 +291,11 @@ export function ChatPage({ accessToken, onAuthenticationFailure, onSignOut }: Ch
         </header>
 
         <div className="messages" aria-live="polite">
+          {nextMessageCursor && (
+            <button type="button" disabled={isStreaming || isLoadingOlderMessages} onClick={() => void loadOlderMessages()}>
+              {isLoadingOlderMessages ? "Loading older messages…" : "Load older messages"}
+            </button>
+          )}
           {messages.length === 0 ? (
             <div className="empty-state">
               <span className="empty-icon">✦</span>
@@ -285,4 +344,17 @@ export function ChatPage({ accessToken, onAuthenticationFailure, onSignOut }: Ch
       </section>
     </main>
   );
+}
+
+function toChatMessage(message: ConversationMessage): ChatMessage {
+  return { id: message.id, role: message.role, content: message.content, status: message.status };
+}
+
+function mergeById<T extends { id: string | number }>(first: T[], second: T[]): T[] {
+  const seen = new Set<string | number>();
+  return [...first, ...second].filter((item) => {
+    if (seen.has(item.id)) return false;
+    seen.add(item.id);
+    return true;
+  });
 }

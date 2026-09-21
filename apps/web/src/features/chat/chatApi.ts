@@ -18,6 +18,16 @@ export interface ConversationMessage {
   createdAt: string;
 }
 
+export interface ConversationPage {
+  conversations: Conversation[];
+  nextCursor?: string;
+}
+
+export interface MessagePage {
+  messages: ConversationMessage[];
+  nextCursor?: string;
+}
+
 interface ChatStreamEvent {
   delta?: unknown;
   conversationId?: unknown;
@@ -66,23 +76,29 @@ async function getJson<T>(url: string, accessToken: string): Promise<T> {
   return response.json() as Promise<T>;
 }
 
-export async function listConversations(accessToken: string): Promise<Conversation[]> {
-  const response = await getJson<{ conversations: Conversation[] }>(
-    conversationsEndpoint,
+export async function listConversations(
+  accessToken: string,
+  cursor?: string,
+): Promise<ConversationPage> {
+  return getJson<ConversationPage>(
+    paginationUrl(conversationsEndpoint, cursor),
     accessToken,
   );
-  return response.conversations;
 }
 
 export async function listConversationMessages(
   conversationId: string,
   accessToken: string,
-): Promise<ConversationMessage[]> {
-  const response = await getJson<{ messages: ConversationMessage[] }>(
-    `${conversationsEndpoint}/${encodeURIComponent(conversationId)}/messages`,
+  cursor?: string,
+): Promise<MessagePage> {
+  return getJson<MessagePage>(
+    paginationUrl(`${conversationsEndpoint}/${encodeURIComponent(conversationId)}/messages`, cursor),
     accessToken,
   );
-  return response.messages;
+}
+
+function paginationUrl(endpoint: string, cursor?: string): string {
+  return cursor ? `${endpoint}?${new URLSearchParams({ cursor })}` : endpoint;
 }
 
 export async function streamConversationResponse(

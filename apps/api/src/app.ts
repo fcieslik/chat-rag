@@ -20,6 +20,8 @@ import {
   createConversationRepository,
   type CreatedFirstTurn,
   type ConversationRepository,
+  type HistoryCursor,
+  type IdempotentTurnResult,
 } from "./db/conversationRepository.js";
 
 const guardrailFallbackMessages = [
@@ -78,11 +80,19 @@ export function createApp(options: AppOptions = {}) {
   app.get(
     "/v1/conversations",
     requireAccessToken(verifyAccessToken),
-    async (_request, response) => {
+    async (request, response) => {
+      const page = parsePageRequest(request.query, 20);
+      if (!page) {
+        response.status(400).json({ error: "Invalid pagination parameters." });
+        return;
+      }
       const auth = response.locals.auth as { sub: string };
       try {
-        const conversations = await conversationRepository.listOwnedConversations(auth.sub);
-        response.json({ conversations: conversations.map(serializeConversation) });
+        const result = await conversationRepository.listOwnedConversations(auth.sub, page);
+        response.json({
+          conversations: result.conversations.map(serializeConversation),
+          ...(result.nextCursor ? { nextCursor: encodeCursor(result.nextCursor) } : {}),
+        });
       } catch {
         response.status(500).json({ error: "Could not load Conversations." });
       }
@@ -121,14 +131,22 @@ export function createApp(options: AppOptions = {}) {
         response.status(404).json({ error: "Conversation not found." });
         return;
       }
+      const page = parsePageRequest(request.query, 50);
+      if (!page) {
+        response.status(400).json({ error: "Invalid pagination parameters." });
+        return;
+      }
       const auth = response.locals.auth as { sub: string };
       try {
-        const messages = await conversationRepository.listOwnedMessages(auth.sub, conversationId);
-        if (!messages) {
+        const result = await conversationRepository.listOwnedMessages(auth.sub, conversationId, page);
+        if (!result) {
           response.status(404).json({ error: "Conversation not found." });
           return;
         }
-        response.json({ messages: messages.map(serializeMessage) });
+        response.json({
+          messages: result.messages.map(serializeMessage),
+          ...(result.nextCursor ? { nextCursor: encodeCursor(result.nextCursor) } : {}),
+        });
       } catch {
         response.status(500).json({ error: "Could not load Messages." });
       }
@@ -149,7 +167,15 @@ export function createApp(options: AppOptions = {}) {
         return;
       }
 
+      const auth = response.locals.auth as { sub: string };
       try {
+        const existingTurn = await conversationRepository.findTurnByClientMessageId(
+          auth.sub,
+          clientMessageId,
+        );
+        if (respondToIdempotentTurn(response, existingTurn)) {
+          return;
+        }
         const guardrailResult = await guardrailService.evaluate(normalizedMessage);
         const guardrailIntervened =
           guardrailResult.action === "GUARDRAIL_INTERVENED";
@@ -167,10 +193,9 @@ export function createApp(options: AppOptions = {}) {
         return;
       }
 
-      const auth = response.locals.auth as { sub: string };
-      let turn;
+      let createFirstTurnResult;
       try {
-        turn = await conversationRepository.createFirstTurn({
+        createFirstTurnResult = await conversationRepository.createFirstTurn({
           cognitoSubject: auth.sub,
           message: normalizedMessage,
           clientMessageId,
@@ -180,10 +205,14 @@ export function createApp(options: AppOptions = {}) {
         response.status(500).json({ error: "Could not create the Conversation." });
         return;
       }
+      if (createFirstTurnResult.kind !== "created") {
+        respondToIdempotentTurn(response, createFirstTurnResult);
+        return;
+      }
       await streamPersistedTurn({
         request,
         response,
-        turn,
+        turn: createFirstTurnResult.turn,
         messages: [{ role: "user", content: normalizedMessage }],
         conversationRepository,
         modelStreamingService,
@@ -209,7 +238,15 @@ export function createApp(options: AppOptions = {}) {
         return;
       }
 
+      const auth = response.locals.auth as { sub: string };
       try {
+        const existingTurn = await conversationRepository.findTurnByClientMessageId(
+          auth.sub,
+          clientMessageId,
+        );
+        if (respondToIdempotentTurn(response, existingTurn)) {
+          return;
+        }
         const guardrailResult = await guardrailService.evaluate(normalizedMessage);
         if (guardrailResult.action === "GUARDRAIL_INTERVENED") {
           streamGuardrailFallback(response);
@@ -220,7 +257,6 @@ export function createApp(options: AppOptions = {}) {
         return;
       }
 
-      const auth = response.locals.auth as { sub: string };
       let appendedTurn;
       try {
         appendedTurn = await conversationRepository.appendTurn({
@@ -240,6 +276,10 @@ export function createApp(options: AppOptions = {}) {
       }
       if (appendedTurn.kind === "pending") {
         response.status(409).json({ error: "A response is already pending." });
+        return;
+      }
+      if (appendedTurn.kind !== "created") {
+        respondToIdempotentTurn(response, appendedTurn);
         return;
       }
 
@@ -388,6 +428,39 @@ export function createApp(options: AppOptions = {}) {
   return app;
 }
 
+function respondToIdempotentTurn(
+  response: express.Response,
+  result: IdempotentTurnResult | Exclude<IdempotentTurnResult, { kind: "missing" }>,
+): boolean {
+  if (result.kind === "missing") {
+    return false;
+  }
+  if (result.kind === "complete") {
+    streamStoredTurn(response, result.turn, result.content);
+    return true;
+  }
+  response.status(409).json({ error: "Turn delivery is not complete." });
+  return true;
+}
+
+function streamStoredTurn(response: express.Response, turn: CreatedFirstTurn, content: string): void {
+  response.status(200);
+  response.setHeader("Content-Type", "text/event-stream; charset=utf-8");
+  response.setHeader("Cache-Control", "no-cache, no-transform");
+  response.setHeader("Connection", "keep-alive");
+  response.flushHeaders();
+  writeSse(response, "turn.started", {
+    conversationId: turn.conversationId.toString(),
+    userMessageId: turn.userMessageId.toString(),
+    assistantMessageId: turn.assistantMessageId.toString(),
+  });
+  if (content) {
+    writeSse(response, "response.delta", { delta: content });
+  }
+  writeSse(response, "response.completed", {});
+  response.end();
+}
+
 async function streamPersistedTurn(input: {
   request: express.Request;
   response: express.Response;
@@ -514,6 +587,58 @@ function parseConversationId(value: unknown): bigint | undefined {
   }
   try {
     return BigInt(value);
+  } catch {
+    return undefined;
+  }
+}
+
+function parsePageRequest(
+  query: express.Request["query"],
+  defaultLimit: number,
+): { limit: number; cursor?: HistoryCursor } | undefined {
+  const limit = query.limit === undefined ? defaultLimit : parseLimit(query.limit);
+  if (limit === undefined) {
+    return undefined;
+  }
+  if (query.cursor === undefined) {
+    return { limit };
+  }
+  const cursor = typeof query.cursor === "string" ? decodeCursor(query.cursor) : undefined;
+  return cursor ? { limit, cursor } : undefined;
+}
+
+function parseLimit(value: unknown): number | undefined {
+  if (typeof value !== "string" || !/^\d+$/.test(value)) {
+    return undefined;
+  }
+  const limit = Number(value);
+  return Number.isSafeInteger(limit) && limit >= 1 && limit <= 100 ? limit : undefined;
+}
+
+function encodeCursor(cursor: HistoryCursor): string {
+  return Buffer.from(JSON.stringify({ t: cursor.timestamp.toISOString(), i: cursor.id.toString() }))
+    .toString("base64url");
+}
+
+function decodeCursor(value: string): HistoryCursor | undefined {
+  try {
+    const decoded: unknown = JSON.parse(Buffer.from(value, "base64url").toString("utf8"));
+    if (
+      typeof decoded !== "object" ||
+      decoded === null ||
+      !("t" in decoded) ||
+      !("i" in decoded) ||
+      typeof decoded.t !== "string" ||
+      typeof decoded.i !== "string" ||
+      !/^\d+$/.test(decoded.i)
+    ) {
+      return undefined;
+    }
+    const timestamp = new Date(decoded.t);
+    if (Number.isNaN(timestamp.getTime()) || timestamp.toISOString() !== decoded.t) {
+      return undefined;
+    }
+    return { timestamp, id: BigInt(decoded.i) };
   } catch {
     return undefined;
   }

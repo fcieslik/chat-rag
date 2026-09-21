@@ -39,10 +39,14 @@ function createModelStreamingService(
 
 function createConversationRepository(): ConversationRepository {
   return {
+    findTurnByClientMessageId: vi.fn().mockResolvedValue({ kind: "missing" }),
     createFirstTurn: vi.fn().mockResolvedValue({
-      conversationId: 1n,
-      userMessageId: 2n,
-      assistantMessageId: 3n,
+      kind: "created",
+      turn: {
+        conversationId: 1n,
+        userMessageId: 2n,
+        assistantMessageId: 3n,
+      },
     }),
     appendTurn: vi.fn(),
     finishAssistantMessage: vi.fn().mockResolvedValue(undefined),
@@ -335,5 +339,74 @@ describe("API authentication boundary", () => {
     expect(response.status).toBe(204);
     expect(response.headers["access-control-allow-origin"]).toBe("http://localhost:5173");
     expect(response.headers["access-control-allow-headers"]).toContain("Authorization");
+  });
+
+  it("validates Conversation page parameters and encodes its keyset cursor", async () => {
+    const conversationRepository = createConversationRepository();
+    vi.mocked(conversationRepository.listOwnedConversations).mockResolvedValue({
+      conversations: [{
+        id: 2n,
+        title: "Newest",
+        createdAt: new Date("2026-01-02T00:00:00.000Z"),
+        activityAt: new Date("2026-01-02T00:00:00.000Z"),
+      }],
+      nextCursor: { timestamp: new Date("2026-01-01T00:00:00.000Z"), id: 1n },
+    });
+    const app = createApp({
+      verifyAccessToken: vi.fn().mockResolvedValue(validClaims),
+      conversationRepository,
+    });
+
+    const response = await request(app).get("/v1/conversations").set("Authorization", "Bearer token");
+
+    expect(response.status).toBe(200);
+    expect(response.body).toMatchObject({ conversations: [{ id: "2", title: "Newest" }], nextCursor: expect.any(String) });
+    expect(conversationRepository.listOwnedConversations).toHaveBeenCalledWith(
+      "cognito-user-1",
+      { limit: 20 },
+    );
+    await request(app)
+      .get(`/v1/conversations?cursor=${encodeURIComponent(response.body.nextCursor)}`)
+      .set("Authorization", "Bearer token");
+    expect(conversationRepository.listOwnedConversations).toHaveBeenLastCalledWith(
+      "cognito-user-1",
+      { limit: 20, cursor: { timestamp: new Date("2026-01-01T00:00:00.000Z"), id: 1n } },
+    );
+    await expect(request(app).get("/v1/conversations?limit=101").set("Authorization", "Bearer token"))
+      .resolves.toMatchObject({ status: 400, body: { error: "Invalid pagination parameters." } });
+    await expect(request(app).get("/v1/conversations?cursor=invalid").set("Authorization", "Bearer token"))
+      .resolves.toMatchObject({ status: 400, body: { error: "Invalid pagination parameters." } });
+  });
+
+  it("loads the newest Message page chronologically and accepts its opaque older cursor", async () => {
+    const conversationRepository = createConversationRepository();
+    vi.mocked(conversationRepository.listOwnedMessages).mockResolvedValue({
+      messages: [{
+        id: 2n,
+        role: "assistant",
+        status: "complete",
+        content: "Newest",
+        metadata: {},
+        replyToMessageId: null,
+        createdAt: new Date("2026-01-02T00:00:00.000Z"),
+      }],
+      nextCursor: { timestamp: new Date("2026-01-01T00:00:00.000Z"), id: 1n },
+    });
+    const app = createApp({
+      verifyAccessToken: vi.fn().mockResolvedValue(validClaims),
+      conversationRepository,
+    });
+
+    const response = await request(app)
+      .get("/v1/conversations/42/messages?limit=100")
+      .set("Authorization", "Bearer token");
+
+    expect(response.status).toBe(200);
+    expect(response.body).toMatchObject({ messages: [{ id: "2", content: "Newest" }], nextCursor: expect.any(String) });
+    expect(conversationRepository.listOwnedMessages).toHaveBeenCalledWith(
+      "cognito-user-1",
+      42n,
+      { limit: 100 },
+    );
   });
 });

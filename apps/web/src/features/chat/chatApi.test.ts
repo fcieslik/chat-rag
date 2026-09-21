@@ -1,5 +1,10 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { AuthenticationError, streamConversationResponse } from "./chatApi";
+import {
+  AuthenticationError,
+  listConversationMessages,
+  listConversations,
+  streamConversationResponse,
+} from "./chatApi";
 
 describe("chat API", () => {
   beforeEach(() => {
@@ -102,5 +107,25 @@ describe("chat API", () => {
         signal: new AbortController().signal,
       }),
     ).rejects.toBeInstanceOf(AuthenticationError);
+  });
+
+  it("passes opaque cursors through the Conversation and Message endpoints", async () => {
+    const fetchMock = vi.spyOn(globalThis, "fetch")
+      .mockResolvedValueOnce(new Response(JSON.stringify({ conversations: [] }), { status: 200 }))
+      .mockResolvedValueOnce(new Response(JSON.stringify({ messages: [] }), { status: 200 }));
+
+    await listConversations("access-token-value", "conversation cursor");
+    await listConversationMessages("42", "access-token-value", "message cursor");
+
+    expect(fetchMock).toHaveBeenNthCalledWith(
+      1,
+      expect.stringContaining("cursor=conversation+cursor"),
+      expect.anything(),
+    );
+    expect(fetchMock).toHaveBeenNthCalledWith(
+      2,
+      expect.stringContaining("/42/messages?cursor=message+cursor"),
+      expect.anything(),
+    );
   });
 });
