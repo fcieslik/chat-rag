@@ -1,7 +1,7 @@
 import { drizzle } from "drizzle-orm/node-postgres";
 import { migrate } from "drizzle-orm/node-postgres/migrator";
-import { Client } from "pg";
 import { fileURLToPath } from "node:url";
+import { createMigrationClient } from "./databaseRuntime.js";
 
 export const migrationAdvisoryLockKey = 8_271_203_451n;
 const defaultMigrationsFolder = fileURLToPath(new URL("./migrations", import.meta.url));
@@ -10,7 +10,7 @@ export async function runMigrations(
   databaseUrl: string,
   migrationsFolder = process.env.MIGRATIONS_FOLDER ?? defaultMigrationsFolder,
 ): Promise<void> {
-  const client = new Client({ connectionString: databaseUrl });
+  const client = createMigrationClient(databaseUrl);
   await client.connect();
 
   try {

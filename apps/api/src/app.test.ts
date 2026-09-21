@@ -53,6 +53,7 @@ function createConversationRepository(): ConversationRepository {
     listOwnedConversations: vi.fn(),
     getOwnedConversation: vi.fn(),
     listOwnedMessages: vi.fn(),
+    ready: vi.fn(),
     close: vi.fn(),
   };
 }

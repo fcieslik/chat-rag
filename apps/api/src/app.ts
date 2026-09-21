@@ -696,7 +696,3 @@ function streamGuardrailFallback(response: express.Response): void {
 function writeSse(response: express.Response, event: string, data: unknown): void {
   response.write(`event: ${event}\ndata: ${JSON.stringify(data)}\n\n`);
 }
-
-const app = createApp();
-
-export { app };

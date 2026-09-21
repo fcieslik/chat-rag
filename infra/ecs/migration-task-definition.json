@@ -1,0 +1,38 @@
+{
+  "containerDefinitions": [
+    {
+      "name": "chat-rag-api-migration",
+      "image": "385740679214.dkr.ecr.eu-central-1.amazonaws.com/chat-rag-api@sha256:62402c3d7a8ce59379fef59e8d8c60fafbb92fa36813433828a1b56c0c0b3c5e",
+      "cpu": 1024,
+      "memory": 2048,
+      "essential": true,
+      "command": ["node", "apps/api/dist/db/migrate.js"],
+      "environment": [
+        { "name": "AWS_REGION", "value": "eu-central-1" },
+        { "name": "NODE_ENV", "value": "production" }
+      ],
+      "secrets": [
+        { "name": "DATABASE_URL", "valueFrom": "chat-rag/db/migrate" }
+      ],
+      "logConfiguration": {
+        "logDriver": "awslogs",
+        "options": {
+          "awslogs-group": "/ecs/chat-rag-api",
+          "awslogs-region": "eu-central-1",
+          "awslogs-stream-prefix": "ecs"
+        }
+      }
+    }
+  ],
+  "family": "chat-rag-api-migration",
+  "taskRoleArn": "arn:aws:iam::385740679214:role/chat-rag-ecs-task",
+  "executionRoleArn": "arn:aws:iam::385740679214:role/chat-rag-ecs-task-execution",
+  "networkMode": "awsvpc",
+  "requiresCompatibilities": ["FARGATE"],
+  "cpu": "1024",
+  "memory": "2048",
+  "runtimePlatform": {
+    "cpuArchitecture": "X86_64",
+    "operatingSystemFamily": "LINUX"
+  }
+}

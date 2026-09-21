@@ -1,5 +1,6 @@
-import { Pool, type PoolClient } from "pg";
+import { type Pool, type PoolClient } from "pg";
 import type { ModelMessage } from "../modelStreaming.js";
+import { createDatabasePool } from "./databaseRuntime.js";
 
 export interface CreatedFirstTurn {
   conversationId: bigint;
@@ -90,19 +91,14 @@ export interface ConversationRepository {
     conversationId: bigint,
     page: PageRequest,
   ): Promise<MessagePage | undefined>;
+  ready(): Promise<void>;
   close(): Promise<void>;
 }
 
 export function createConversationRepository(
   databaseUrl = process.env.DATABASE_URL,
+  pool: Pool = createDatabasePool(databaseUrl),
 ): ConversationRepository {
-  const pool = new Pool({
-    connectionString: databaseUrl,
-    max: 10,
-    idleTimeoutMillis: 30_000,
-    connectionTimeoutMillis: 5_000,
-  });
-
   return {
     async findTurnByClientMessageId(cognitoSubject, clientMessageId) {
       return lookupTurn(pool, cognitoSubject, clientMessageId);
@@ -309,6 +305,10 @@ export function createConversationRepository(
           ? { nextCursor: { timestamp: oldestMessage.createdAt, id: oldestMessage.id } }
           : {}),
       };
+    },
+
+    async ready() {
+      await pool.query("select 1");
     },
 
     async close() {

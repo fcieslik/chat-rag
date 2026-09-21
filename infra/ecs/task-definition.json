@@ -34,6 +34,10 @@
       "volumesFrom": [],
       "secrets": [
         {
+          "name": "DATABASE_URL",
+          "valueFrom": "chat-rag/db/app"
+        },
+        {
           "name": "OPENAI_API_KEY",
           "valueFrom": "arn:aws:secretsmanager:eu-central-1:385740679214:secret:chat-rag/openai-teyZN5:OPENAI_API_KEY::"
         }

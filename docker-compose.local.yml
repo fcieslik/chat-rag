@@ -35,6 +35,7 @@ services:
       BEDROCK_GUARDRAIL_ID: wrbzgwf3rz1e
       BEDROCK_GUARDRAIL_VERSION: "1"
       DATABASE_URL: ${LOCAL_API_DATABASE_URL:-postgresql://chat_rag_app:local-app-password@postgres:5432/postgres?sslmode=disable}
+      DATABASE_SSL_MODE: disable
     depends_on:
       postgres:
         condition: service_healthy
