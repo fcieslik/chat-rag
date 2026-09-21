@@ -91,6 +91,54 @@ describePostgres("POST /v1/conversations", () => {
     });
   });
 
+  it("persists an error Message with partial output when the provider fails after streaming", async () => {
+    const failingStreamingService: ModelStreamingService = {
+      start: vi.fn().mockResolvedValue({
+        async *[Symbol.asyncIterator]() {
+          yield "Partial answer";
+          throw new Error("provider unavailable");
+        },
+      }),
+    };
+
+    const response = await request(createApp({
+      verifyAccessToken: vi.fn().mockResolvedValue({ client_id: "client-123", token_use: "access", sub: "cognito-user-1" }),
+      guardrailService,
+      modelStreamingService: failingStreamingService,
+      conversationRepository: repository,
+    }))
+      .post("/v1/conversations")
+      .set("Authorization", "Bearer valid-token")
+      .send({ message: "First persisted message", clientMessageId: "4f9a19a2-e950-4ea2-95a7-63d5910b7edf" });
+
+    expect(response.status).toBe(200);
+    expect(response.text).toContain('event: response.failed\ndata: {"error":"Streaming failed."}');
+    await expect(
+      migrationClient.query("select status, content from messages where role = 'assistant'"),
+    ).resolves.toMatchObject({ rows: [{ status: "error", content: "Partial answer" }] });
+  });
+
+  it("persists an error Message before SSE headers when the provider cannot start", async () => {
+    const failingStreamingService: ModelStreamingService = {
+      start: vi.fn().mockRejectedValue(new Error("provider unavailable")),
+    };
+
+    const response = await request(createApp({
+      verifyAccessToken: vi.fn().mockResolvedValue({ client_id: "client-123", token_use: "access", sub: "cognito-user-1" }),
+      guardrailService,
+      modelStreamingService: failingStreamingService,
+      conversationRepository: repository,
+    }))
+      .post("/v1/conversations")
+      .set("Authorization", "Bearer valid-token")
+      .send({ message: "First persisted message", clientMessageId: "4f9a19a2-e950-4ea2-95a7-63d5910b7edf" });
+
+    expect(response).toMatchObject({ status: 502, body: { error: "Streaming request to OpenAI failed." } });
+    await expect(
+      migrationClient.query("select status, content from messages where role = 'assistant'"),
+    ).resolves.toMatchObject({ rows: [{ status: "error", content: "" }] });
+  });
+
   it("rejects invalid input before persistence or model invocation", async () => {
     const response = await request(
       createApp({

@@ -43,7 +43,11 @@ export interface ConversationRepository {
     clientMessageId: string;
     assistantMetadata: Record<string, string>;
   }): Promise<AppendTurnResult>;
-  completeAssistantMessage(assistantMessageId: bigint, content: string): Promise<void>;
+  finishAssistantMessage(
+    assistantMessageId: bigint,
+    status: "complete" | "error" | "aborted",
+    content: string,
+  ): Promise<void>;
   listOwnedConversations(cognitoSubject: string): Promise<StoredConversation[]>;
   getOwnedConversation(cognitoSubject: string, conversationId: bigint): Promise<StoredConversation | undefined>;
   listOwnedMessages(cognitoSubject: string, conversationId: bigint): Promise<StoredMessage[] | undefined>;
@@ -99,10 +103,10 @@ export function createConversationRepository(
       }
     },
 
-    async completeAssistantMessage(assistantMessageId, content) {
+    async finishAssistantMessage(assistantMessageId, status, content) {
       await pool.query(
-        "update messages set status = 'complete', content = $2 where id = $1 and status = 'pending'",
-        [assistantMessageId, content],
+        "update messages set status = $2, content = $3 where id = $1 and status = 'pending'",
+        [assistantMessageId, status, content],
       );
     },
 

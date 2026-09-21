@@ -1,15 +1,21 @@
 import { fireEvent, render, screen } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
 import { ChatPage } from "./ChatPage";
-import { listConversationMessages, listConversations } from "./chatApi";
+import { listConversationMessages, listConversations, streamConversationResponse } from "./chatApi";
 
 vi.mock("./chatApi", async () => {
   const actual = await vi.importActual<typeof import("./chatApi")>("./chatApi");
-  return { ...actual, listConversations: vi.fn(), listConversationMessages: vi.fn() };
+  return {
+    ...actual,
+    listConversations: vi.fn(),
+    listConversationMessages: vi.fn(),
+    streamConversationResponse: vi.fn(),
+  };
 });
 
 const listConversationsMock = vi.mocked(listConversations);
 const listConversationMessagesMock = vi.mocked(listConversationMessages);
+const streamConversationResponseMock = vi.mocked(streamConversationResponse);
 
 describe("ChatPage conversation loading", () => {
   it("opens the newest Conversation and replaces its history when another is selected", async () => {
@@ -38,5 +44,31 @@ describe("ChatPage conversation loading", () => {
 
     expect(await screen.findByText("No saved conversations.")).toBeInTheDocument();
     expect(screen.getByText("Start a conversation")).toBeInTheDocument();
+  });
+
+  it("retains partial output and labels it aborted after Stop", async () => {
+    listConversationsMock.mockResolvedValue([]);
+    streamConversationResponseMock.mockImplementation(async ({ onDelta, signal }) => {
+      onDelta("Partial answer");
+      await new Promise<never>((_resolve, reject) => {
+        signal.addEventListener("abort", () => {
+          const abortError = new Error("aborted");
+          abortError.name = "AbortError";
+          reject(abortError);
+        }, { once: true });
+      });
+    });
+
+    render(<ChatPage accessToken="access-token-value" onAuthenticationFailure={vi.fn()} onSignOut={vi.fn()} />);
+
+    await screen.findByText("No saved conversations.");
+    fireEvent.change(screen.getByRole("textbox", { name: "Message" }), { target: { value: "Question" } });
+    fireEvent.click(screen.getByRole("button", { name: "Send" }));
+
+    expect(await screen.findByText("Partial answer")).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "Stop" }));
+
+    expect(await screen.findByText("aborted")).toBeInTheDocument();
+    expect(screen.getByText("Partial answer")).toBeInTheDocument();
   });
 });

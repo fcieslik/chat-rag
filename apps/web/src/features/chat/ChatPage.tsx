@@ -1,6 +1,7 @@
 import { FormEvent, useEffect, useRef, useState } from "react";
 import {
   AuthenticationError,
+  type AssistantTerminalStatus,
   type Conversation,
   type ConversationMessage,
   listConversationMessages,
@@ -156,17 +157,20 @@ export function ChatPage({ accessToken, onAuthenticationFailure, onSignOut }: Ch
             ),
           );
         },
+        onTerminal: (status) => {
+          setAssistantMessageStatus(assistantMessageId, status);
+        },
         signal: controller.signal,
       });
     } catch (requestError) {
-      if (!controller.signal.aborted) {
+      if (controller.signal.aborted) {
+        setAssistantMessageStatus(assistantMessageId, "aborted");
+      } else {
         if (requestError instanceof Error && requestError.name === "AuthenticationError") {
           onAuthenticationFailure();
         }
         setError(requestError instanceof Error ? requestError.message : "The chat request failed.");
-        setMessages((currentMessages) =>
-          currentMessages.filter((currentMessage) => currentMessage.id !== assistantMessageId),
-        );
+        setAssistantMessageStatus(assistantMessageId, "error");
       }
     } finally {
       if (abortController.current === controller) {
@@ -178,7 +182,19 @@ export function ChatPage({ accessToken, onAuthenticationFailure, onSignOut }: Ch
 
   function handleStop() {
     abortController.current?.abort();
-    setIsStreaming(false);
+  }
+
+  function setAssistantMessageStatus(
+    assistantMessageId: string | number,
+    status: AssistantTerminalStatus,
+  ) {
+    setMessages((currentMessages) =>
+      currentMessages.map((currentMessage) =>
+        currentMessage.id === assistantMessageId
+          ? { ...currentMessage, status }
+          : currentMessage,
+      ),
+    );
   }
 
   return (

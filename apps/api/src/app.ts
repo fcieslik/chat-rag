@@ -408,6 +408,8 @@ async function streamPersistedTurn(input: {
   input.request.on("aborted", abortIfClientDisconnects);
   input.response.on("close", abortIfClientDisconnects);
 
+  let content = "";
+
   try {
     const deltas = await input.modelStreamingService.start({
       messages: input.messages,
@@ -425,22 +427,42 @@ async function streamPersistedTurn(input: {
       assistantMessageId: input.turn.assistantMessageId.toString(),
     });
 
-    let content = "";
     for await (const delta of deltas) {
       content += delta;
       writeSse(input.response, "response.delta", { delta });
     }
 
-    await input.conversationRepository.completeAssistantMessage(
+    if (clientDisconnected || abortController.signal.aborted) {
+      await input.conversationRepository.finishAssistantMessage(
+        input.turn.assistantMessageId,
+        "aborted",
+        content,
+      );
+      return;
+    }
+
+    await input.conversationRepository.finishAssistantMessage(
       input.turn.assistantMessageId,
+      "complete",
       content,
     );
     writeSse(input.response, "response.completed", {});
     input.response.end();
   } catch (error) {
     if (clientDisconnected || (error instanceof Error && error.name === "AbortError")) {
+      await input.conversationRepository.finishAssistantMessage(
+        input.turn.assistantMessageId,
+        "aborted",
+        content,
+      );
       return;
     }
+
+    await input.conversationRepository.finishAssistantMessage(
+      input.turn.assistantMessageId,
+      "error",
+      content,
+    );
 
     if (error instanceof ModelStreamingResponseError && !input.response.headersSent) {
       if (error.kind === "request_failed") {

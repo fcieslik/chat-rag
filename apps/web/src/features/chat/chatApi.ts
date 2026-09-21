@@ -31,6 +31,8 @@ export interface TurnStartedEvent {
   assistantMessageId: string;
 }
 
+export type AssistantTerminalStatus = "complete" | "error" | "aborted";
+
 export class AuthenticationError extends Error {
   constructor() {
     super("Your session is no longer valid. Please sign in again.");
@@ -91,6 +93,7 @@ export async function streamConversationResponse(
     accessToken: string;
     onTurnStarted: (turn: TurnStartedEvent) => void;
     onDelta: (delta: string) => void;
+    onTerminal: (status: AssistantTerminalStatus) => void;
     signal: AbortSignal;
   },
 ): Promise<void> {
@@ -173,6 +176,12 @@ export async function streamConversationResponse(
         }
         if (typeof parsed.delta === "string") {
           input.onDelta(parsed.delta);
+        }
+        if (eventName === "response.completed") {
+          input.onTerminal("complete");
+        }
+        if (eventName === "response.failed") {
+          input.onTerminal("error");
         }
       }
 

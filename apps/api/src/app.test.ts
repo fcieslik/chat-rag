@@ -1,6 +1,7 @@
 import request from "supertest";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { createApp } from "./app.js";
+import type { ConversationRepository } from "./db/conversationRepository.js";
 import type { GuardrailService } from "./guardrailService.js";
 import type { ModelStreamingService } from "./modelStreaming.js";
 
@@ -33,6 +34,22 @@ function createModelStreamingService(
         yield* deltas;
       })(),
     ),
+  };
+}
+
+function createConversationRepository(): ConversationRepository {
+  return {
+    createFirstTurn: vi.fn().mockResolvedValue({
+      conversationId: 1n,
+      userMessageId: 2n,
+      assistantMessageId: 3n,
+    }),
+    appendTurn: vi.fn(),
+    finishAssistantMessage: vi.fn().mockResolvedValue(undefined),
+    listOwnedConversations: vi.fn(),
+    getOwnedConversation: vi.fn(),
+    listOwnedMessages: vi.fn(),
+    close: vi.fn(),
   };
 }
 
@@ -143,6 +160,80 @@ describe("API authentication boundary", () => {
     expect(response.body).toEqual({
       error: "Streaming request to OpenAI failed.",
     });
+  });
+
+  it("persists partial output as an error and emits a failed terminal event", async () => {
+    const verifyAccessToken = vi.fn().mockResolvedValue(validClaims);
+    const guardrailService = createGuardrailService("NONE");
+    const conversationRepository = createConversationRepository();
+    const modelStreamingService: ModelStreamingService = {
+      start: vi.fn().mockResolvedValue({
+        async *[Symbol.asyncIterator]() {
+          yield "partial";
+          throw new Error("provider unavailable");
+        },
+      }),
+    };
+
+    const response = await request(createApp({
+      verifyAccessToken,
+      guardrailService,
+      modelStreamingService,
+      conversationRepository,
+    }))
+      .post("/v1/conversations")
+      .set("Authorization", "Bearer valid-token")
+      .send({
+        message: "hello",
+        clientMessageId: "4f9a19a2-e950-4ea2-95a7-63d5910b7edf",
+      });
+
+    expect(response.status).toBe(200);
+    expect(response.text).toContain('event: response.delta\ndata: {"delta":"partial"}');
+    expect(response.text).toContain('event: response.failed\ndata: {"error":"Streaming failed."}');
+    expect(conversationRepository.finishAssistantMessage).toHaveBeenCalledWith(3n, "error", "partial");
+  });
+
+  it("persists an aborted terminal state when the streaming client disconnects", async () => {
+    const verifyAccessToken = vi.fn().mockResolvedValue(validClaims);
+    const guardrailService = createGuardrailService("NONE");
+    const conversationRepository = createConversationRepository();
+    let notifyStreamStarted: (() => void) | undefined;
+    const streamStarted = new Promise<void>((resolve) => { notifyStreamStarted = resolve; });
+    const modelStreamingService: ModelStreamingService = {
+      start: vi.fn().mockImplementation(({ signal }) => {
+        notifyStreamStarted?.();
+        return Promise.resolve({
+          async *[Symbol.asyncIterator]() {
+            yield "partial";
+            await new Promise<void>((resolve) => {
+              signal.addEventListener("abort", () => resolve(), { once: true });
+            });
+            const abortError = new Error("aborted");
+            abortError.name = "AbortError";
+            throw abortError;
+          },
+        });
+      }),
+    };
+    const chatRequest = request(createApp({
+      verifyAccessToken,
+      guardrailService,
+      modelStreamingService,
+      conversationRepository,
+    }))
+      .post("/v1/conversations")
+      .set("Authorization", "Bearer valid-token")
+      .send({ message: "hello", clientMessageId: "4f9a19a2-e950-4ea2-95a7-63d5910b7edf" });
+
+    const settledRequest = chatRequest.then(() => undefined, () => undefined);
+    await streamStarted;
+    chatRequest.abort();
+
+    await vi.waitFor(() => {
+      expect(conversationRepository.finishAssistantMessage).toHaveBeenCalledWith(3n, "aborted", "partial");
+    });
+    await settledRequest;
   });
 
   it("cancels model streaming when the client disconnects", async () => {

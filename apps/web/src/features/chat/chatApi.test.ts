@@ -26,6 +26,7 @@ describe("chat API", () => {
       accessToken: "access-token-value",
       onTurnStarted: (turn) => turns.push(turn.conversationId),
       onDelta: (delta) => deltas.push(delta),
+      onTerminal: () => undefined,
       signal: new AbortController().signal,
     });
 
@@ -42,6 +43,32 @@ describe("chat API", () => {
     expect(turns).toEqual(["42"]);
   });
 
+  it("reports a failed streaming terminal event after retaining received deltas", async () => {
+    const responseBody = new ReadableStream({
+      start(controller) {
+        controller.enqueue(new TextEncoder().encode('event: response.delta\ndata: {"delta":"partial"}\n\nevent: response.failed\ndata: {"error":"Streaming failed."}\n\n'));
+        controller.close();
+      },
+    });
+    vi.spyOn(globalThis, "fetch").mockResolvedValue(new Response(responseBody, { status: 200 }));
+    const deltas: string[] = [];
+    const terminalStates: string[] = [];
+
+    await streamConversationResponse({
+      conversationId: "42",
+      message: "question",
+      clientMessageId: "4f9a19a2-e950-4ea2-95a7-63d5910b7edf",
+      accessToken: "access-token-value",
+      onTurnStarted: () => undefined,
+      onDelta: (delta) => deltas.push(delta),
+      onTerminal: (status) => terminalStates.push(status),
+      signal: new AbortController().signal,
+    });
+
+    expect(deltas).toEqual(["partial"]);
+    expect(terminalStates).toEqual(["error"]);
+  });
+
   it("rejects a chat request when no access token is available", async () => {
     const fetchMock = vi.spyOn(globalThis, "fetch");
 
@@ -53,6 +80,7 @@ describe("chat API", () => {
         accessToken: "",
         onTurnStarted: () => undefined,
         onDelta: () => undefined,
+        onTerminal: () => undefined,
         signal: new AbortController().signal,
       }),
     ).rejects.toThrow("Authentication is required.");
@@ -70,6 +98,7 @@ describe("chat API", () => {
         accessToken: "expired-token",
         onTurnStarted: () => undefined,
         onDelta: () => undefined,
+        onTerminal: () => undefined,
         signal: new AbortController().signal,
       }),
     ).rejects.toBeInstanceOf(AuthenticationError);
