@@ -26,7 +26,7 @@ Open the frontend at [http://localhost:5173](http://localhost:5173) and sign in 
 ```text
 Frontend: http://localhost:5173
 API:      http://localhost:8000
-Chat:     POST http://localhost:8000/v1/chat
+Conversations: POST http://localhost:8000/v1/conversations
 Health:   GET  http://localhost:8000/health
 ```
 
@@ -42,10 +42,10 @@ Start the API and frontend in separate terminals:
 
 ```bash
 pnpm dev:api
-VITE_CHAT_API_URL= VITE_API_URL= pnpm dev:web
+VITE_API_URL= pnpm dev:web
 ```
 
-Open [http://localhost:5173](http://localhost:5173), sign in, and use the chat. The empty environment variables override the AWS value from `apps/web/.env.local`, so Vite proxies `/v1/chat` to the local API on port `8000`.
+Open [http://localhost:5173](http://localhost:5173), sign in, and use the chat. The empty environment variable overrides the AWS value from `apps/web/.env.local`, so Vite proxies `/v1` to the local API on port `8000`.
 
 The frontend Cognito defaults match the current User Pool. For another environment, copy `apps/web/.env.example` to `apps/web/.env.local` and set the `VITE_COGNITO_*` values. The Cognito app client must be a public client using Authorization Code Grant with PKCE, and must allow `http://localhost:5173` as callback and sign-out URLs.
 
@@ -146,17 +146,17 @@ An OIDC, Bedrock, or evaluation assertion failure fails CI. If AWS-managed Guard
 Start Vite in a second terminal:
 
 ```bash
-VITE_CHAT_API_URL= VITE_API_URL= pnpm dev:web
+VITE_API_URL= pnpm dev:web
 ```
 
-Open [http://localhost:5173](http://localhost:5173) and sign in. Empty Vite variables make the browser send `POST /v1/chat` to Vite, which proxies the request to the local API at `http://localhost:8000/v1/chat`. A permitted message streams the OpenAI response; a message blocked by the guardrail streams one of the API's five fallback messages and never reaches OpenAI. A `503 Bedrock Guardrail is unavailable` response means the SSO profile lacks `bedrock:ApplyGuardrail`, its SSO session expired, or the guardrail is unavailable in `eu-central-1`.
+Open [http://localhost:5173](http://localhost:5173) and sign in. An empty Vite variable makes the browser send Conversation requests to Vite, which proxies them to the local API at `http://localhost:8000`. A permitted message streams the OpenAI response; a message blocked by the guardrail streams one of the API's five fallback messages and never reaches OpenAI. A `503 Bedrock Guardrail is unavailable` response means the SSO profile lacks `bedrock:ApplyGuardrail`, its SSO session expired, or the guardrail is unavailable in `eu-central-1`.
 
 ## Testing the AWS API from the frontend
 
 The file `apps/web/.env.local` contains the configured API Gateway endpoint:
 
 ```env
-VITE_CHAT_API_URL=https://2780017ujg.execute-api.eu-central-1.amazonaws.com/prod/chat
+VITE_API_URL=https://2780017ujg.execute-api.eu-central-1.amazonaws.com/prod
 ```
 
 Start Vite:
@@ -173,7 +173,7 @@ The AWS API must allow CORS for the origin used by the browser. Configure the EC
 FRONTEND_ORIGINS=http://localhost:5173,https://YOUR-FRONTEND-DOMAIN
 ```
 
-Configure the API Gateway route `/chat` to support `OPTIONS` and allow:
+Configure API Gateway Conversation routes to support `OPTIONS` and allow:
 
 ```text
 Methods: POST, OPTIONS
@@ -186,17 +186,20 @@ The deployed API must also return `Access-Control-Allow-Origin` on the `POST` re
 Example direct request:
 
 ```bash
-curl -N https://2780017ujg.execute-api.eu-central-1.amazonaws.com/prod/chat \
+curl -N https://2780017ujg.execute-api.eu-central-1.amazonaws.com/prod/v1/conversations \
   -H "Content-Type: application/json" \
   -H "Authorization: Bearer <cognito-access-token>" \
-  -d '{"message":"Reply with one short sentence."}'
+  -d '{"message":"Reply with one short sentence.","clientMessageId":"4f9a19a2-e950-4ea2-95a7-63d5910b7edf"}'
 ```
 
 The response is streamed as SSE events:
 
 ```text
+event: response.delta
 data: {"delta":"..."}
-data: [DONE]
+
+event: response.completed
+data: {}
 ```
 
 ## Production build
@@ -204,7 +207,7 @@ data: [DONE]
 For a different API endpoint or Cognito environment, provide the values during the build:
 
 ```bash
-VITE_CHAT_API_URL=https://api.example.com/prod/chat \
+VITE_API_URL=https://api.example.com/prod \
 VITE_COGNITO_AUTHORITY=https://cognito-idp.eu-central-1.amazonaws.com/eu-central-1_example \
 VITE_COGNITO_CLIENT_ID=example-client-id \
 VITE_COGNITO_DOMAIN=https://example.auth.eu-central-1.amazoncognito.com \

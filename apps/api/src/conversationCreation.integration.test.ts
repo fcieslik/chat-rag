@@ -198,7 +198,9 @@ describePostgres("POST /v1/conversations", () => {
       });
 
     expect(response.status).toBe(200);
-    expect(response.text).toMatch(/^data: \{"delta":".+"\}\n\ndata: \[DONE\]\n\n$/);
+    expect(response.text).toMatch(
+      /^event: response\.delta\ndata: \{"delta":".+"\}\n\nevent: response\.completed\ndata: \{\}\n\n$/,
+    );
     expect(modelStreamingService.start).not.toHaveBeenCalled();
     await expect(
       migrationClient.query("select count(*)::integer as count from conversations"),
