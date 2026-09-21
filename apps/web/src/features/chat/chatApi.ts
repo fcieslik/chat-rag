@@ -1,6 +1,4 @@
 const apiUrl = (import.meta.env.VITE_API_URL ?? "").replace(/\/$/, "");
-const chatEndpoint =
-  import.meta.env.VITE_CHAT_API_URL?.trim() || `${apiUrl}/v1/chat`;
 const conversationsEndpoint = `${apiUrl}/v1/conversations`;
 
 export interface Conversation {
@@ -22,6 +20,15 @@ export interface ConversationMessage {
 
 interface ChatStreamEvent {
   delta?: unknown;
+  conversationId?: unknown;
+  userMessageId?: unknown;
+  assistantMessageId?: unknown;
+}
+
+export interface TurnStartedEvent {
+  conversationId: string;
+  userMessageId: string;
+  assistantMessageId: string;
 }
 
 export class AuthenticationError extends Error {
@@ -76,24 +83,32 @@ export async function listConversationMessages(
   return response.messages;
 }
 
-export async function streamChatResponse(
-  message: string,
-  accessToken: string,
-  onDelta: (delta: string) => void,
-  signal: AbortSignal,
+export async function streamConversationResponse(
+  input: {
+    conversationId: string | null;
+    message: string;
+    clientMessageId: string;
+    accessToken: string;
+    onTurnStarted: (turn: TurnStartedEvent) => void;
+    onDelta: (delta: string) => void;
+    signal: AbortSignal;
+  },
 ): Promise<void> {
-  if (!accessToken) {
+  if (!input.accessToken) {
     throw new Error("Authentication is required.");
   }
 
-  const response = await fetch(chatEndpoint, {
+  const endpoint = input.conversationId
+    ? `${conversationsEndpoint}/${encodeURIComponent(input.conversationId)}/messages`
+    : conversationsEndpoint;
+  const response = await fetch(endpoint, {
     method: "POST",
     headers: {
-      Authorization: `Bearer ${accessToken}`,
+      Authorization: `Bearer ${input.accessToken}`,
       "Content-Type": "application/json",
     },
-    body: JSON.stringify({ message }),
-    signal,
+    body: JSON.stringify({ message: input.message, clientMessageId: input.clientMessageId }),
+    signal: input.signal,
   });
 
   if (!response.ok) {
@@ -142,13 +157,22 @@ export async function streamChatResponse(
           continue;
         }
 
-        if (data === "[DONE]") {
-          return;
-        }
-
         const parsed = JSON.parse(data) as ChatStreamEvent;
+        const eventName = event
+          .split(/\r?\n/)
+          .find((line) => line.startsWith("event:"))
+          ?.slice("event:".length)
+          .trim();
+        if (
+          eventName === "turn.started" &&
+          typeof parsed.conversationId === "string" &&
+          typeof parsed.userMessageId === "string" &&
+          typeof parsed.assistantMessageId === "string"
+        ) {
+          input.onTurnStarted(parsed as TurnStartedEvent);
+        }
         if (typeof parsed.delta === "string") {
-          onDelta(parsed.delta);
+          input.onDelta(parsed.delta);
         }
       }
 
@@ -164,15 +188,15 @@ export async function streamChatResponse(
         .map((line) => line.slice("data:".length).trimStart())
         .join("\n");
 
-      if (data && data !== "[DONE]") {
+      if (data) {
         const parsed = JSON.parse(data) as ChatStreamEvent;
         if (typeof parsed.delta === "string") {
-          onDelta(parsed.delta);
+          input.onDelta(parsed.delta);
         }
       }
     }
   } catch (error) {
-    if (signal.aborted) {
+    if (input.signal.aborted) {
       return;
     }
 

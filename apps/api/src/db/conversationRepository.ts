@@ -1,10 +1,16 @@
 import { Pool, type PoolClient } from "pg";
+import type { ModelMessage } from "../modelStreaming.js";
 
 export interface CreatedFirstTurn {
   conversationId: bigint;
   userMessageId: bigint;
   assistantMessageId: bigint;
 }
+
+export type AppendTurnResult =
+  | { kind: "not_found" }
+  | { kind: "pending" }
+  | { kind: "created"; turn: CreatedFirstTurn; context: ModelMessage[] };
 
 export interface StoredConversation {
   id: bigint;
@@ -30,6 +36,13 @@ export interface ConversationRepository {
     clientMessageId: string;
     assistantMetadata: Record<string, string>;
   }): Promise<CreatedFirstTurn>;
+  appendTurn(input: {
+    cognitoSubject: string;
+    conversationId: bigint;
+    message: string;
+    clientMessageId: string;
+    assistantMetadata: Record<string, string>;
+  }): Promise<AppendTurnResult>;
   completeAssistantMessage(assistantMessageId: bigint, content: string): Promise<void>;
   listOwnedConversations(cognitoSubject: string): Promise<StoredConversation[]>;
   getOwnedConversation(cognitoSubject: string, conversationId: bigint): Promise<StoredConversation | undefined>;
@@ -91,6 +104,67 @@ export function createConversationRepository(
         "update messages set status = 'complete', content = $2 where id = $1 and status = 'pending'",
         [assistantMessageId, content],
       );
+    },
+
+    async appendTurn(input) {
+      const client = await pool.connect();
+
+      try {
+        await client.query("begin");
+        const conversation = await client.query<{ id: bigint }>(
+          "select c.id from conversations c join users u on u.id = c.user_id where u.cognito_subject = $1 and c.id = $2 and c.deleted_at is null for update",
+          [input.cognitoSubject, input.conversationId],
+        );
+        if (!conversation.rows[0]) {
+          await client.query("commit");
+          return { kind: "not_found" };
+        }
+
+        await client.query(
+          "update messages set status = 'aborted' where conversation_id = $1 and role = 'assistant' and status = 'pending' and created_at < now() - interval '10 minutes'",
+          [input.conversationId],
+        );
+        const pendingAssistant = await client.query(
+          "select 1 from messages where conversation_id = $1 and role = 'assistant' and status = 'pending' limit 1",
+          [input.conversationId],
+        );
+        if (pendingAssistant.rows[0]) {
+          await client.query("commit");
+          return { kind: "pending" };
+        }
+
+        const persistedMessages = await client.query<ModelMessage>(
+          "select role, content from (select role, content, created_at, id from messages where conversation_id = $1 and status = 'complete' order by created_at desc, id desc limit 20) recent order by created_at asc, id asc",
+          [input.conversationId],
+        );
+        const userMessage = await client.query<{ id: bigint }>(
+          "insert into messages (conversation_id, role, status, content, client_message_id) values ($1, 'user', 'complete', $2, $3) returning id",
+          [input.conversationId, input.message, input.clientMessageId],
+        );
+        const assistantMessage = await client.query<{ id: bigint }>(
+          "insert into messages (conversation_id, role, status, reply_to_message_id, metadata) values ($1, 'assistant', 'pending', $2, $3::jsonb) returning id",
+          [input.conversationId, userMessage.rows[0]!.id, JSON.stringify(input.assistantMetadata)],
+        );
+        await client.query("update conversations set activity_at = now() where id = $1", [
+          input.conversationId,
+        ]);
+        await client.query("commit");
+
+        return {
+          kind: "created",
+          turn: {
+            conversationId: input.conversationId,
+            userMessageId: userMessage.rows[0]!.id,
+            assistantMessageId: assistantMessage.rows[0]!.id,
+          },
+          context: [...persistedMessages.rows, { role: "user", content: input.message }],
+        };
+      } catch (error) {
+        await client.query("rollback");
+        throw error;
+      } finally {
+        client.release();
+      }
     },
 
     async listOwnedConversations(cognitoSubject) {

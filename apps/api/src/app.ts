@@ -13,10 +13,12 @@ import {
   createModelStreamingService,
   ModelStreamingResponseError,
   openAiModel,
+  type ModelMessage,
   type ModelStreamingService,
 } from "./modelStreaming.js";
 import {
   createConversationRepository,
+  type CreatedFirstTurn,
   type ConversationRepository,
 } from "./db/conversationRepository.js";
 
@@ -178,76 +180,77 @@ export function createApp(options: AppOptions = {}) {
         response.status(500).json({ error: "Could not create the Conversation." });
         return;
       }
+      await streamPersistedTurn({
+        request,
+        response,
+        turn,
+        messages: [{ role: "user", content: normalizedMessage }],
+        conversationRepository,
+        modelStreamingService,
+      });
+    },
+  );
 
-      const abortController = new AbortController();
-      let clientDisconnected = false;
-      const abortIfClientDisconnects = () => {
-        if (!response.writableEnded) {
-          clientDisconnected = true;
-          abortController.abort();
-        }
-      };
-
-      request.on("aborted", abortIfClientDisconnects);
-      response.on("close", abortIfClientDisconnects);
+  app.post(
+    "/v1/conversations/:conversationId/messages",
+    requireAccessToken(verifyAccessToken),
+    async (request, response) => {
+      const conversationId = parseConversationId(request.params.conversationId);
+      const { message, clientMessageId } = request.body as ChatRequestBody;
+      const normalizedMessage = normalizeMessage(message);
+      if (conversationId === undefined) {
+        response.status(404).json({ error: "Conversation not found." });
+        return;
+      }
+      if (!normalizedMessage || !isUuid(clientMessageId)) {
+        response.status(400).json({
+          error: "The message must be 1–10,000 characters and clientMessageId must be a UUID.",
+        });
+        return;
+      }
 
       try {
-        const deltas = await modelStreamingService.start({
-          messages: [{ role: "user", content: normalizedMessage }],
-          signal: abortController.signal,
-        });
-
-        response.status(200);
-        response.setHeader("Content-Type", "text/event-stream; charset=utf-8");
-        response.setHeader("Cache-Control", "no-cache, no-transform");
-        response.setHeader("Connection", "keep-alive");
-        response.flushHeaders();
-        writeSse(response, "turn.started", {
-          conversationId: turn.conversationId.toString(),
-          userMessageId: turn.userMessageId.toString(),
-          assistantMessageId: turn.assistantMessageId.toString(),
-        });
-
-        let content = "";
-        for await (const delta of deltas) {
-          content += delta;
-          writeSse(response, "response.delta", { delta });
-        }
-
-        await conversationRepository.completeAssistantMessage(
-          turn.assistantMessageId,
-          content,
-        );
-        writeSse(response, "response.completed", {});
-        response.end();
-      } catch (error) {
-        if (clientDisconnected || (error instanceof Error && error.name === "AbortError")) {
+        const guardrailResult = await guardrailService.evaluate(normalizedMessage);
+        if (guardrailResult.action === "GUARDRAIL_INTERVENED") {
+          streamGuardrailFallback(response);
           return;
         }
-
-        if (error instanceof ModelStreamingResponseError && !response.headersSent) {
-          if (error.kind === "request_failed") {
-            response.status(502).json({
-              error: "OpenAI request failed.",
-              details: error.details,
-            });
-            return;
-          }
-          response.status(502).json({ error: "OpenAI returned an empty stream." });
-          return;
-        }
-
-        if (response.headersSent) {
-          writeSse(response, "response.failed", { error: "Streaming failed." });
-          response.end();
-          return;
-        }
-
-        response.status(502).json({ error: "Streaming request to OpenAI failed." });
-      } finally {
-        request.off("aborted", abortIfClientDisconnects);
-        response.off("close", abortIfClientDisconnects);
+      } catch {
+        response.status(503).json({ error: "Bedrock Guardrail is unavailable." });
+        return;
       }
+
+      const auth = response.locals.auth as { sub: string };
+      let appendedTurn;
+      try {
+        appendedTurn = await conversationRepository.appendTurn({
+          cognitoSubject: auth.sub,
+          conversationId,
+          message: normalizedMessage,
+          clientMessageId,
+          assistantMetadata: { model: openAiModel },
+        });
+      } catch {
+        response.status(500).json({ error: "Could not append the Message." });
+        return;
+      }
+      if (appendedTurn.kind === "not_found") {
+        response.status(404).json({ error: "Conversation not found." });
+        return;
+      }
+      if (appendedTurn.kind === "pending") {
+        response.status(409).json({ error: "A response is already pending." });
+        return;
+      }
+
+      await streamPersistedTurn({
+        request,
+        response,
+        turn: appendedTurn.turn,
+        messages: appendedTurn.context,
+        conversationRepository,
+        modelStreamingService,
+      });
     },
   );
 
@@ -383,6 +386,85 @@ export function createApp(options: AppOptions = {}) {
   );
 
   return app;
+}
+
+async function streamPersistedTurn(input: {
+  request: express.Request;
+  response: express.Response;
+  turn: CreatedFirstTurn;
+  messages: ModelMessage[];
+  conversationRepository: ConversationRepository;
+  modelStreamingService: ModelStreamingService;
+}): Promise<void> {
+  const abortController = new AbortController();
+  let clientDisconnected = false;
+  const abortIfClientDisconnects = () => {
+    if (!input.response.writableEnded) {
+      clientDisconnected = true;
+      abortController.abort();
+    }
+  };
+
+  input.request.on("aborted", abortIfClientDisconnects);
+  input.response.on("close", abortIfClientDisconnects);
+
+  try {
+    const deltas = await input.modelStreamingService.start({
+      messages: input.messages,
+      signal: abortController.signal,
+    });
+
+    input.response.status(200);
+    input.response.setHeader("Content-Type", "text/event-stream; charset=utf-8");
+    input.response.setHeader("Cache-Control", "no-cache, no-transform");
+    input.response.setHeader("Connection", "keep-alive");
+    input.response.flushHeaders();
+    writeSse(input.response, "turn.started", {
+      conversationId: input.turn.conversationId.toString(),
+      userMessageId: input.turn.userMessageId.toString(),
+      assistantMessageId: input.turn.assistantMessageId.toString(),
+    });
+
+    let content = "";
+    for await (const delta of deltas) {
+      content += delta;
+      writeSse(input.response, "response.delta", { delta });
+    }
+
+    await input.conversationRepository.completeAssistantMessage(
+      input.turn.assistantMessageId,
+      content,
+    );
+    writeSse(input.response, "response.completed", {});
+    input.response.end();
+  } catch (error) {
+    if (clientDisconnected || (error instanceof Error && error.name === "AbortError")) {
+      return;
+    }
+
+    if (error instanceof ModelStreamingResponseError && !input.response.headersSent) {
+      if (error.kind === "request_failed") {
+        input.response.status(502).json({
+          error: "OpenAI request failed.",
+          details: error.details,
+        });
+        return;
+      }
+      input.response.status(502).json({ error: "OpenAI returned an empty stream." });
+      return;
+    }
+
+    if (input.response.headersSent) {
+      writeSse(input.response, "response.failed", { error: "Streaming failed." });
+      input.response.end();
+      return;
+    }
+
+    input.response.status(502).json({ error: "Streaming request to OpenAI failed." });
+  } finally {
+    input.request.off("aborted", abortIfClientDisconnects);
+    input.response.off("close", abortIfClientDisconnects);
+  }
 }
 
 function normalizeMessage(message: unknown): string | undefined {

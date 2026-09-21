@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { AuthenticationError, streamChatResponse } from "./chatApi";
+import { AuthenticationError, streamConversationResponse } from "./chatApi";
 
 describe("chat API", () => {
   beforeEach(() => {
@@ -9,7 +9,7 @@ describe("chat API", () => {
   it("sends the Cognito access token as a bearer credential", async () => {
     const responseBody = new ReadableStream({
       start(controller) {
-        controller.enqueue(new TextEncoder().encode('data: {"delta":"hello"}\n\ndata: [DONE]\n\n'));
+        controller.enqueue(new TextEncoder().encode('event: turn.started\ndata: {"conversationId":"42","userMessageId":"43","assistantMessageId":"44"}\n\nevent: response.delta\ndata: {"delta":"hello"}\n\n'));
         controller.close();
       },
     });
@@ -17,8 +17,17 @@ describe("chat API", () => {
       new Response(responseBody, { status: 200 }),
     );
     const deltas: string[] = [];
+    const turns: string[] = [];
 
-    await streamChatResponse("question", "access-token-value", (delta) => deltas.push(delta), new AbortController().signal);
+    await streamConversationResponse({
+      conversationId: "42",
+      message: "question",
+      clientMessageId: "4f9a19a2-e950-4ea2-95a7-63d5910b7edf",
+      accessToken: "access-token-value",
+      onTurnStarted: (turn) => turns.push(turn.conversationId),
+      onDelta: (delta) => deltas.push(delta),
+      signal: new AbortController().signal,
+    });
 
     expect(fetchMock).toHaveBeenCalledWith(
       expect.any(String),
@@ -30,13 +39,22 @@ describe("chat API", () => {
       }),
     );
     expect(deltas).toEqual(["hello"]);
+    expect(turns).toEqual(["42"]);
   });
 
   it("rejects a chat request when no access token is available", async () => {
     const fetchMock = vi.spyOn(globalThis, "fetch");
 
     await expect(
-      streamChatResponse("question", "", () => undefined, new AbortController().signal),
+      streamConversationResponse({
+        conversationId: null,
+        message: "question",
+        clientMessageId: "4f9a19a2-e950-4ea2-95a7-63d5910b7edf",
+        accessToken: "",
+        onTurnStarted: () => undefined,
+        onDelta: () => undefined,
+        signal: new AbortController().signal,
+      }),
     ).rejects.toThrow("Authentication is required.");
     expect(fetchMock).not.toHaveBeenCalled();
   });
@@ -45,7 +63,15 @@ describe("chat API", () => {
     vi.spyOn(globalThis, "fetch").mockResolvedValue(new Response(null, { status: 401 }));
 
     await expect(
-      streamChatResponse("question", "expired-token", () => undefined, new AbortController().signal),
+      streamConversationResponse({
+        conversationId: null,
+        message: "question",
+        clientMessageId: "4f9a19a2-e950-4ea2-95a7-63d5910b7edf",
+        accessToken: "expired-token",
+        onTurnStarted: () => undefined,
+        onDelta: () => undefined,
+        signal: new AbortController().signal,
+      }),
     ).rejects.toBeInstanceOf(AuthenticationError);
   });
 });

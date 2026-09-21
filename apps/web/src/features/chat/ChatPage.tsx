@@ -5,7 +5,7 @@ import {
   type ConversationMessage,
   listConversationMessages,
   listConversations,
-  streamChatResponse,
+  streamConversationResponse,
 } from "./chatApi";
 
 type Role = "user" | "assistant" | "system";
@@ -100,6 +100,8 @@ export function ChatPage({ accessToken, onAuthenticationFailure, onSignOut }: Ch
       content: message,
     };
     const assistantMessageId = nextMessageId.current++;
+    const conversationId = selectedConversationId;
+    const activityAt = new Date().toISOString();
 
     setInput("");
     setError(null);
@@ -109,15 +111,43 @@ export function ChatPage({ accessToken, onAuthenticationFailure, onSignOut }: Ch
       userMessage,
       { id: assistantMessageId, role: "assistant", content: "" },
     ]);
+    if (conversationId) {
+      setConversations((currentConversations) => {
+        const activeConversation = currentConversations.find(
+          (conversation) => conversation.id === conversationId,
+        );
+        if (!activeConversation) return currentConversations;
+        return [
+          { ...activeConversation, activityAt },
+          ...currentConversations.filter((conversation) => conversation.id !== conversationId),
+        ];
+      });
+    }
 
     const controller = new AbortController();
     abortController.current = controller;
 
     try {
-      await streamChatResponse(
+      await streamConversationResponse({
+        conversationId,
         message,
+        clientMessageId: crypto.randomUUID(),
         accessToken,
-        (delta) => {
+        onTurnStarted: (turn) => {
+          if (!conversationId) {
+            setSelectedConversationId(turn.conversationId);
+            setConversations((currentConversations) => [
+              {
+                id: turn.conversationId,
+                title: message.slice(0, 80),
+                createdAt: activityAt,
+                activityAt,
+              },
+              ...currentConversations,
+            ]);
+          }
+        },
+        onDelta: (delta) => {
           setMessages((currentMessages) =>
             currentMessages.map((currentMessage) =>
               currentMessage.id === assistantMessageId
@@ -126,8 +156,8 @@ export function ChatPage({ accessToken, onAuthenticationFailure, onSignOut }: Ch
             ),
           );
         },
-        controller.signal,
-      );
+        signal: controller.signal,
+      });
     } catch (requestError) {
       if (!controller.signal.aborted) {
         if (requestError instanceof Error && requestError.name === "AuthenticationError") {
