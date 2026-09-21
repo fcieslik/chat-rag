@@ -1,3 +1,4 @@
+import { X509Certificate } from "node:crypto";
 import { describe, expect, it } from "vitest";
 import { createDatabaseConnectionConfig } from "./databaseRuntime.js";
 
@@ -18,6 +19,18 @@ describe("database runtime configuration", () => {
 
     expect(config.ssl).toMatchObject({ rejectUnauthorized: true });
     expect(config.connectionString).not.toContain("sslmode");
+  });
+
+  it("loads a parseable RDS CA bundle containing the active RSA2048 root", () => {
+    const config = createDatabaseConnectionConfig(databaseUrl, { NODE_ENV: "production" });
+    if (!config.ssl || typeof config.ssl !== "object" || typeof config.ssl.ca !== "string") {
+      throw new Error("Production database CA bundle is missing");
+    }
+
+    const certificates = config.ssl.ca.match(/-----BEGIN CERTIFICATE-----[\s\S]*?-----END CERTIFICATE-----/g);
+    expect(certificates).toHaveLength(3);
+    const subjects = certificates!.map((certificate) => new X509Certificate(certificate).subject);
+    expect(subjects.some((subject) => subject.includes("Amazon RDS eu-central-1 Root CA RSA2048 G1"))).toBe(true);
   });
 
   it("refuses an explicit production TLS downgrade", () => {
